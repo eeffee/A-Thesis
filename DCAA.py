@@ -42,7 +42,7 @@ class EEGNet(nn.Module):
         # Initial length: 15000
         # After first pool: 7500
         # After second pool: 3750
-        output_size = 1875
+        output_size = 937
         self.fc_layers = nn.Sequential(
             nn.Linear(64 * output_size, 128),  # Correctly calculate the flattened size
             nn.ReLU(),
@@ -53,14 +53,15 @@ class EEGNet(nn.Module):
         # Ensure the tensor is properly shaped
         if x.dim() == 4 and x.shape[1] == 1:  # Assuming unnecessary singleton dimension present
             x = x.squeeze(1)  # Remove the singleton dimension
-
+        print(f"Input shape: {x.shape}")
         # Now unpack the dimensions
         batch_size, num_channels, L = x.shape
-
         x = self.conv_layers(x)
+        print(f"After conv layers shape: {x.shape}")
         x = x.view(x.size(0), -1)  # Flatten the output
+        print(f"After flattening shape: {x.shape}")
         x = self.fc_layers(x)
-        x = x.view(batch_size, -1).mean(dim=1)  # Average the outputs across batches if needed
+        #x = x.view(batch_size, -1).mean(dim=1)  # Average the outputs across batches if needed
         return x
 
 
@@ -100,7 +101,7 @@ class AudioFeatureNet(nn.Module):
         final_length = 10336 // 2 // 2 // 2  # Adjust based on the actual size after pooling
         self.fc_layers = nn.Sequential(
             #nn.Linear(128 * final_length, 128),  # Ensure 256 * final_length is correct
-            nn.Linear(64 * 14, 128), #for phase, for Mel
+            nn.Linear(64 * 7, 128), #for phase, for Mel
             #nn.Linear(2560, 128),  # for MFCC
             #nn.Linear(128, 128), #for speech envelope
             #nn.Linear(64, 128), #for speech envelope
@@ -109,8 +110,11 @@ class AudioFeatureNet(nn.Module):
         )
 
     def forward(self, x):
+        print(f"before conv: {x.shape}")
         x = self.conv_layers(x)
+        print(f"after conv: {x.shape}")
         x = x.view(x.size(0), -1)  # Flatten for FC
+        print(f"after flatten: {x.shape}")
         x = self.fc_layers(x)
         return x
 
@@ -215,9 +219,9 @@ class DCCALoss(torch.nn.Module):
 
 def segment_and_extract_features(audio_path, segment_length_sec, sample_rate_audio, feature_extractor, batch_size=256):
     audio, sr = librosa.load(audio_path, sr=sample_rate_audio)
-    if sr != 125:
-        audio = librosa.resample(audio, orig_sr=sr, target_sr=125)
-        sr = 125
+    if sr != 250:
+        audio = librosa.resample(audio, orig_sr=sr, target_sr=250)
+        sr = 250
 
     samples_per_segment = int(segment_length_sec * sr)
 
@@ -267,9 +271,9 @@ def load_and_segment_eeg(subject_id, segment_length_sec, sample_rate_eeg, batch_
     print(f"After PCA, data shape: {eeg_data.shape}")
 
     # Correct resampling post-PCA
-    if eeg_raw.info['sfreq'] != 125:
+    if eeg_raw.info['sfreq'] != 250:
         num_samples = eeg_data.shape[0]  # Total number of samples available
-        new_num_samples = int(num_samples * 125 / eeg_raw.info['sfreq'])  # Calculate new number of samples
+        new_num_samples = int(num_samples * 250 / eeg_raw.info['sfreq'])  # Calculate new number of samples
         eeg_data = resample(eeg_data, new_num_samples, axis=0)  # Resample along the samples dimension
         sample_rate_eeg = 250
         print(f"After resampling, data shape: {eeg_data.shape}")  # Should show (new_num_samples, 17)
@@ -364,14 +368,10 @@ def run_phase(subjects, audio_path, feature_extractor, eeg_net, audio_net, optim
                 optimizer.zero_grad()
 
             # Normalizing EEG and Audio features
-            print(f"Shape of eeg_batch: {eeg_batch.shape}")
             eeg_features = eeg_net(eeg_batch)
-            eeg_features = (eeg_features - eeg_features.mean(dim=1, keepdim=True)) / eeg_features.std(dim=1,
-                                                                                                      keepdim=True)
 
             audio_features = audio_net(audio_batch)
-            audio_features = (audio_features - audio_features.mean(dim=1, keepdim=True)) / audio_features.std(
-                dim=1, keepdim=True)
+
 
             loss = loss_fn(eeg_features, audio_features)
             if phase == 'train' and optimizer:
