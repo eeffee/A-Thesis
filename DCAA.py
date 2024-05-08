@@ -5,7 +5,7 @@ import librosa
 import torch
 from torch import nn, optim
 import numpy as np
-from Codes.models import MelSpectrum, PhaseSpectrum, MFCCSpectrum, SpeechEnvelope
+from Codes.models import MelSpectrum, PhaseSpectrum, MFCCSpectrum, SpeechEnvelope, PhaseOfEnvelope,DeltaDeltaMFCC
 import os
 import random
 import matplotlib.pyplot as plt
@@ -80,10 +80,10 @@ class AudioFeatureNet(nn.Module):
     def __init__(self):
         super(AudioFeatureNet, self).__init__()
         self.conv_layers = nn.Sequential(
-            nn.Conv1d(40, 64, kernel_size=3, stride=1, padding=1),  # for Mel Spectrogram feature
+            #nn.Conv1d(40, 64, kernel_size=3, stride=1, padding=1),  # for Mel Spectrogram feature
             #nn.Conv1d(257, 64, kernel_size=3, stride=1, padding=1),  # for Phase feature
-            #nn.Conv1d(13, 64, kernel_size=3, stride=1, padding=1),  # for MFCC feature
-            #nn.Conv1d(1, 64, kernel_size=3, stride=1, padding=4), # for Speech envelope
+            #nn.Conv1d(13, 64, kernel_size=3, stride=1, padding=1),  # for MFCC feature, Delta-Delta MFCC
+            nn.Conv1d(1, 64, kernel_size=3, stride=1, padding=4), # for Speech envelope, Phase of Envelope
             nn.BatchNorm1d(64),  # Batch normalization
             nn.ReLU(),
             #nn.MaxPool1d(4),  # Reduces size by factor of 4
@@ -101,10 +101,11 @@ class AudioFeatureNet(nn.Module):
         final_length = 10336 // 2 // 2 // 2  # Adjust based on the actual size after pooling
         self.fc_layers = nn.Sequential(
             #nn.Linear(128 * final_length, 128),  # Ensure 256 * final_length is correct
-            nn.Linear(64 * 7, 128), #for phase, for Mel
-            #nn.Linear(2560, 128),  # for MFCC
-            #nn.Linear(128, 128), #for speech envelope
+            #nn.Linear(64 * 7, 128), #for phase, for Mel
+            #nn.Linear(2560, 128),  # for MFCC, not used anymore
             #nn.Linear(64, 128), #for speech envelope
+            nn.Linear(60032, 128), #for phase of envelope
+            #nn.Linear(64, 128),  # for Delta-Delta MFCC, MFCC
             nn.ReLU(),
             nn.Linear(128, 32)
         )
@@ -369,9 +370,12 @@ def run_phase(subjects, audio_path, feature_extractor, eeg_net, audio_net, optim
 
             # Normalizing EEG and Audio features
             eeg_features = eeg_net(eeg_batch)
+            eeg_features = (eeg_features - eeg_features.mean(dim=1, keepdim=True)) / eeg_features.std(dim=1,
+            keepdim=True)
 
             audio_features = audio_net(audio_batch)
-
+            audio_features = (audio_features - audio_features.mean(dim=1, keepdim=True)) / audio_features.std(
+            dim=1, keepdim=True)
 
             loss = loss_fn(eeg_features, audio_features)
             if phase == 'train' and optimizer:
@@ -418,10 +422,12 @@ def main():
     loss_fn = DCCALoss()
     optimizer = optim.Adam(list(eeg_net.parameters()) + list(audio_net.parameters()), lr=0.001)
     # Load MelSpectrum feature extractor
-    audio_feature_ext = MelSpectrum(SAMPLE_RATE_AUDIO)
+    #audio_feature_ext = MelSpectrum(SAMPLE_RATE_AUDIO)
     #audio_feature_ext = PhaseSpectrum(SAMPLE_RATE_AUDIO)
     #audio_feature_ext = MFCCSpectrum(SAMPLE_RATE_AUDIO)
     #audio_feature_ext = SpeechEnvelope(SAMPLE_RATE_AUDIO)
+    audio_feature_ext = PhaseOfEnvelope(SAMPLE_RATE_AUDIO)
+    #audio_feature_ext = DeltaDeltaMFCC(SAMPLE_RATE_AUDIO)
 
     # Adding a test phase
     for epoch in range(13):
@@ -443,8 +449,8 @@ def main():
     print('validation losses', validation_losses)
 
     # Save the model parameters for both networks
-    torch.save(eeg_net.state_dict(), 'Analysis/DCCA-ModelsParameters/eeg_net_mel_theta.pth')
-    torch.save(audio_net.state_dict(), 'Analysis/DCCA-ModelsParameters/audio_net_mel_theta.pth')
+    torch.save(eeg_net.state_dict(), 'Analysis/DCCA-ModelsParameters/eeg_net_mel_theta_v3.pth')
+    torch.save(audio_net.state_dict(), 'Analysis/DCCA-ModelsParameters/audio_net_mel_theta_v3.pth')
     print("Models saved successfully.")
 
 

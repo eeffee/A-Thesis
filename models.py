@@ -11,7 +11,7 @@ import numpy as np
 from pathlib import Path
 from typing import Union
 from torch import nn
-
+from scipy.signal import hilbert
 
 class MelSpectrum:
     def __init__(self, sample_rate: int, n_mels=40, n_fft=512, hop_length=None,
@@ -215,100 +215,95 @@ class MFCCSpectrum:
         """
         return self._compute(wav)
 
+class DeltaDeltaMFCC:
+    def __init__(self, sample_rate: int, n_mfcc: int = 13, n_fft: int = 2048, hop_length: int = None, n_mels: int = 40):
+        """
+        Initializes the DeltaDeltaMFCC class with necessary parameters.
 
-class SimpleConv(nn.Module):
-    def __init__(self, in_channels, out_channels, hidden_channels, depth=4):
-        super().__init__()
-        # Create a sequence of channels from input to hidden depths
-        channels = [in_channels] + [hidden_channels] * (depth - 1) + [out_channels]
-        self.network = ConvSequence(channels, kernel=5, stride=1, dilation_growth=2, activation=nn.ReLU())
+        Parameters:
+        sample_rate (int): The sample rate of the audio files.
+        n_mfcc (int): The number of MFCCs to return.
+        n_fft (int): The number of points in the FFT, affects frequency resolution.
+        hop_length (int): The number of samples between successive frames.
+        n_mels (int): The number of Mel filterbanks.
+        """
+        self.sample_rate = sample_rate
+        self.n_mfcc = n_mfcc
+        self.n_fft = n_fft
+        self.hop_length = hop_length if hop_length is not None else n_fft // 2
+        self.n_mels = n_mels
+        self.mfcc_transform = torchaudio.transforms.MFCC(
+            sample_rate=self.sample_rate,
+            n_mfcc=self.n_mfcc,
+            melkwargs={
+                'n_fft': self.n_fft,
+                'n_mels': self.n_mels,
+                'hop_length': self.hop_length
+            }
+        )
 
-    def forward(self, x):
-        return self.network(x)
+    def _compute(self, wav: torch.Tensor) -> torch.Tensor:
+        """
+        Computes the Delta-Delta MFCCs of an audio tensor.
 
-class ConvSequence(nn.Module):
+        Parameters:
+        wav (torch.Tensor): A tensor of audio samples.
 
-    def __init__(self, channels: tp.Sequence[int], kernel: int = 4, dilation_growth: int = 1,
-                 dilation_period: tp.Optional[int] = None, stride: int = 2,
-                 dropout: float = 0.0, leakiness: float = 0.0, groups: int = 1,
-                 decode: bool = False, batch_norm: bool = False, dropout_input: float = 0,
-                 skip: bool = False, scale: tp.Optional[float] = None, rewrite: bool = False,
-                 activation_on_last: bool = True, post_skip: bool = False, glu: int = 0,
-                 glu_context: int = 0, glu_glu: bool = True, activation: tp.Any = None) -> None:
-        super().__init__()
-        dilation = 1
-        channels = tuple(channels)
-        self.skip = skip
-        self.sequence = nn.ModuleList()
-        self.glus = nn.ModuleList()
-        if activation is None:
-            activation = partial(nn.LeakyReLU, leakiness)
-        Conv = nn.Conv1d if not decode else nn.ConvTranspose1d
-        # build layers
-        for k, (chin, chout) in enumerate(zip(channels[:-1], channels[1:])):
-            layers: tp.List[nn.Module] = []
-            is_last = k == len(channels) - 2
+        Returns:
+        torch.Tensor: The Delta-Delta MFCCs of the audio tensor.
+        """
+        if wav.dim() > 1:
+            wav = torch.mean(wav, dim=0)  # Convert stereo to mono if necessary
+        mfccs = self.mfcc_transform(wav)  # Compute MFCC
+        deltas = torchaudio.functional.compute_deltas(mfccs)
+        delta_deltas = torchaudio.functional.compute_deltas(deltas)
+        return delta_deltas
 
-            # Set dropout for the input of the conv sequence if defined
-            if k == 0 and dropout_input:
-                assert 0 < dropout_input < 1
-                layers.append(nn.Dropout(dropout_input))
+    def get_feature(self, wav: torch.Tensor) -> torch.Tensor:
+        """
+        Public method to get the Delta-Delta MFCC features of an audio tensor.
 
-            # conv layer
-            if dilation_growth > 1:
-                assert kernel % 2 != 0, "Supports only odd kernel with dilation for now"
-            if dilation_period and (k % dilation_period) == 0:
-                dilation = 1
-            pad = kernel // 2 * dilation
-            layers.append(Conv(chin, chout, kernel, stride, pad,
-                               dilation=dilation, groups=groups if k > 0 else 1))
-            dilation *= dilation_growth
-            # non-linearity
-            if activation_on_last or not is_last:
-                if batch_norm:
-                    layers.append(nn.BatchNorm1d(num_features=chout))
-                layers.append(activation())
-                if dropout:
-                    layers.append(nn.Dropout(dropout))
-                if rewrite:
-                    layers += [nn.Conv1d(chout, chout, 1), nn.LeakyReLU(leakiness)]
-                    # layers += [nn.Conv1d(chout, 2 * chout, 1), nn.GLU(dim=1)]
-            if chin == chout and skip:
-                if scale is not None:
-                    layers.append(LayerScale(chout, scale))
-                if post_skip:
-                    layers.append(Conv(chout, chout, 1, groups=chout, bias=False))
+        Parameters:
+        wav (torch.Tensor): A tensor of audio samples.
 
-            self.sequence.append(nn.Sequential(*layers))
-            if glu and (k + 1) % glu == 0:
-                ch = 2 * chout if glu_glu else chout
-                act = nn.GLU(dim=1) if glu_glu else activation()
-                self.glus.append(
-                    nn.Sequential(
-                        nn.Conv1d(chout, ch, 1 + 2 * glu_context, padding=glu_context), act))
-            else:
-                self.glus.append(None)
+        Returns:
+        torch.Tensor: The Delta-Delta MFCCs of the audio tensor.
+        """
+        return self._compute(wav)
 
-    def forward(self, x: tp.Any) -> tp.Any:
-        for module_idx, module in enumerate(self.sequence):
-            old_x = x
-            x = module(x)
-            if self.skip and x.shape == old_x.shape:
-                x = x + old_x
-            glu = self.glus[module_idx]
-            if glu is not None:
-                x = glu(x)
-        return x
+class PhaseOfEnvelope:
+    def __init__(self, sample_rate: int):
+        """
+        Initializes the PhaseOfEnvelope class with the necessary parameter.
 
-class LayerScale(nn.Module):
-    """Layer scale from [Touvron et al 2021] (https://arxiv.org/pdf/2103.17239.pdf).
-    This rescales diagonaly residual outputs close to 0 initially, then learnt.
-    """
-    def __init__(self, channels: int, init: float = 0.1, boost: float = 5.):
-        super().__init__()
-        self.scale = nn.Parameter(torch.zeros(channels, requires_grad=True))
-        self.scale.data[:] = init / boost
-        self.boost = boost
+        Parameters:
+        sample_rate (int): The sample rate of the audio data.
+        """
+        self.sample_rate = sample_rate
 
-    def forward(self, x):
-        return (self.boost * self.scale[:, None]) * x
+    def _compute(self, wav: torch.Tensor) -> torch.Tensor:
+        """
+        Computes the phase of the envelope of an audio waveform using the Hilbert transform.
+
+        Parameters:
+        wav (torch.Tensor): A 1D tensor of audio samples.
+
+        Returns:
+        torch.Tensor: The phase of the envelope.
+        """
+        wav_np = wav.numpy()  # Convert to NumPy array for Hilbert transform
+        analytic_signal = hilbert(wav_np)  # Compute the analytic signal
+        envelope_phase = np.angle(analytic_signal)  # Extract the phase
+        return torch.from_numpy(envelope_phase)
+
+    def get_feature(self, wav: torch.Tensor) -> torch.Tensor:
+        """
+        Public method to get the phase of the envelope feature of an audio tensor.
+
+        Parameters:
+        wav (torch.Tensor): A tensor of audio samples.
+
+        Returns:
+        torch.Tensor: The phase of the envelope.
+        """
+        return self._compute(wav)
