@@ -10,7 +10,7 @@ import os
 import random
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
-from scipy.signal import resample
+from scipy.signal import resample, hilbert
 
 
 
@@ -21,7 +21,7 @@ def segment_audio(audio_path, segment_length=30, sr=44100):
 
 
 class EEGNet(nn.Module):
-    def __init__(self, input_channels=17):
+    def __init__(self, input_channels=17,transform_type=None):
         super(EEGNet, self).__init__()
         self.conv_layers = nn.Sequential(
             nn.Conv1d(input_channels, 128, kernel_size=3, padding=1),  # Convolution over time for each channel
@@ -42,9 +42,14 @@ class EEGNet(nn.Module):
         # Initial length: 15000
         # After first pool: 7500
         # After second pool: 3750
-        output_size = 937
+        # Calculate output size based on transform_type
+        if transform_type == 'raw':
+            output_size = 64 * 937  # Assuming the final sequence length after pooling is 937
+        elif transform_type == 'phase':
+            output_size = 120000  # Adjust this based on the actual length post-transformations for phase
+
         self.fc_layers = nn.Sequential(
-            nn.Linear(64 * output_size, 128),  # Correctly calculate the flattened size
+            nn.Linear(output_size, 128),  # Correctly calculate the flattened size
             nn.ReLU(),
             nn.Linear(128, 32)
         )
@@ -53,7 +58,6 @@ class EEGNet(nn.Module):
         # Ensure the tensor is properly shaped
         if x.dim() == 4 and x.shape[1] == 1:  # Assuming unnecessary singleton dimension present
             x = x.squeeze(1)  # Remove the singleton dimension
-        print(f"Input shape: {x.shape}")
         # Now unpack the dimensions
         batch_size, num_channels, L = x.shape
         x = self.conv_layers(x)
@@ -80,10 +84,10 @@ class AudioFeatureNet(nn.Module):
     def __init__(self):
         super(AudioFeatureNet, self).__init__()
         self.conv_layers = nn.Sequential(
-            #nn.Conv1d(40, 64, kernel_size=3, stride=1, padding=1),  # for Mel Spectrogram feature
+            nn.Conv1d(40, 64, kernel_size=3, stride=1, padding=1),  # for Mel Spectrogram feature
             #nn.Conv1d(257, 64, kernel_size=3, stride=1, padding=1),  # for Phase feature
             #nn.Conv1d(13, 64, kernel_size=3, stride=1, padding=1),  # for MFCC feature, Delta-Delta MFCC
-            nn.Conv1d(1, 64, kernel_size=3, stride=1, padding=4), # for Speech envelope, Phase of Envelope
+            #nn.Conv1d(1, 64, kernel_size=3, stride=1, padding=4), # for Speech envelope, Phase of Envelope
             nn.BatchNorm1d(64),  # Batch normalization
             nn.ReLU(),
             #nn.MaxPool1d(4),  # Reduces size by factor of 4
@@ -101,10 +105,10 @@ class AudioFeatureNet(nn.Module):
         final_length = 10336 // 2 // 2 // 2  # Adjust based on the actual size after pooling
         self.fc_layers = nn.Sequential(
             #nn.Linear(128 * final_length, 128),  # Ensure 256 * final_length is correct
-            #nn.Linear(64 * 7, 128), #for phase, for Mel
+            nn.Linear(64 * 7, 128), #for phase, for Mel
             #nn.Linear(2560, 128),  # for MFCC, not used anymore
             #nn.Linear(64, 128), #for speech envelope
-            nn.Linear(60032, 128), #for phase of envelope
+            #nn.Linear(60032, 128), #for phase of envelope
             #nn.Linear(64, 128),  # for Delta-Delta MFCC, MFCC
             nn.ReLU(),
             nn.Linear(128, 32)
@@ -258,86 +262,71 @@ def bandpass_filter(data, sfreq, l_freq, h_freq):
     filtered_data = mne.filter.filter_data(data, sfreq, l_freq, h_freq, method='iir', iir_params=filter_design)
     return filtered_data
 
+def extract_phase(data):
+    analytic_signal = hilbert(data)
+    phase_data = np.angle(analytic_signal)
+    return phase_data
 
-def load_and_segment_eeg(subject_id, segment_length_sec, sample_rate_eeg, batch_size=256):
-    # Instantiate and load data using Brennan2019Recording
+
+#transform_type = can be raw or phase, frequency bands are theta, gamma, delta, speech
+def load_and_segment_eeg(subject_id, segment_length_sec, sample_rate_eeg, batch_size=256, frequency_band=None, transform_type=None):
+    # Initialize and load data using some EEG data loader
     recording = Brennan2019Recording(subject_uid=subject_id, recording_uid=None)
     eeg_raw = recording._load_raw()  # Load EEG data
-
-    # Extract data as a NumPy array from the MNE Raw object
     eeg_data = eeg_raw.get_data()
+
+    # Frequency bands
+    freq_bands = {
+        'gamma': (30, 100),
+        'beta': (13, 30),
+        'speech': (1, 10),
+        'delta': (1, 4),
+        'theta': (4, 8)
+    }
+
+    # Filter EEG data if a frequency band is specified
+    if frequency_band in freq_bands:
+        l_freq, h_freq = freq_bands[frequency_band]
+        eeg_data = bandpass_filter(eeg_data, eeg_raw.info['sfreq'], l_freq, h_freq)
+
+    # Extract phase if requested
+    if transform_type == 'phase':
+        eeg_data = extract_phase(eeg_data)
 
     # Apply PCA
     eeg_data = apply_pca_to_eeg_data(eeg_data)
-    print(f"After PCA, data shape: {eeg_data.shape}")
 
-    # Correct resampling post-PCA
-    if eeg_raw.info['sfreq'] != 250:
-        num_samples = eeg_data.shape[0]  # Total number of samples available
-        new_num_samples = int(num_samples * 250 / eeg_raw.info['sfreq'])  # Calculate new number of samples
-        eeg_data = resample(eeg_data, new_num_samples, axis=0)  # Resample along the samples dimension
-        sample_rate_eeg = 250
-        print(f"After resampling, data shape: {eeg_data.shape}")  # Should show (new_num_samples, 17)
+    # Resample post-PCA if needed
+    if eeg_raw.info['sfreq'] != sample_rate_eeg:
+        num_samples = eeg_data.shape[0]
+        new_num_samples = int(num_samples * sample_rate_eeg / eeg_raw.info['sfreq'])
+        eeg_data = resample(eeg_data, new_num_samples, axis=0)
 
+    # Process and batch data
     def process_data(data, segment_length_sec, sample_rate_eeg, batch_size):
-        # Data should be shaped as (num_components, total_samples)
         data = data.T
         num_components, total_samples = data.shape
-
         samples_per_segment = int(segment_length_sec * sample_rate_eeg)
-        print(f"Total samples available: {total_samples}")
-        print(f"Samples required per segment: {samples_per_segment}")
-
-        if samples_per_segment > total_samples:
-            print("Error: Not enough samples to form a segment.")
-            return []
-
         segments = []
+
         for start in range(0, total_samples - samples_per_segment + 1, samples_per_segment):
-            # Take a slice for each segment and ensure components are treated as channels
             segment = data[:, start:start + samples_per_segment]
-            segments.append(segment[np.newaxis, :, :])  # Adds a batch dimension
+            segments.append(segment[np.newaxis, :, :])
 
         if not segments:
-            print("No segments were created. Returning empty list.")
             return []
 
-        # Concatenate segments and convert to tensor
         segments_tensor = torch.tensor(np.concatenate(segments, axis=0), dtype=torch.float32)
-        segments_tensor = (segments_tensor - segments_tensor.mean(dim=2, keepdim=True)) / segments_tensor.std(dim=2,
-                                                                                                              keepdim=True)
-
-        # Ensure each batch has the correct size, handling the last batch separately if it's smaller
+        segments_tensor = (segments_tensor - segments_tensor.mean(dim=2, keepdim=True)) / segments_tensor.std(dim=2, keepdim=True)
         total_batches = (len(segments) + batch_size - 1) // batch_size
-        batched_segments = [segments_tensor[i * batch_size:min((i + 1) * batch_size, len(segments_tensor))]
-                            for i in range(total_batches)]
+        batched_segments = [segments_tensor[i * batch_size:min((i + 1) * batch_size, len(segments_tensor))] for i in range(total_batches)]
 
         return batched_segments
 
-    # Filter the data for different bands and process each
-    #gamma_data = bandpass_filter(eeg_data, sample_rate_eeg, 30, 100)  # Gamma: 30-100 Hz
-    #beta_data = bandpass_filter(eeg_data, sample_rate_eeg, 13, 30)  # Beta: 13-30 Hz
-    #alpha_data = bandpass_filter(eeg_data, sample_rate_eeg, 8, 12)  # Alpha: 8-12 Hz
-    #delta_data = bandpass_filter(eeg_data, sample_rate_eeg, 1, 4)  # Delta: 1-4 Hz
-    theta_data = bandpass_filter(eeg_data, sample_rate_eeg, 4, 8)  # Theta: 4-8 Hz
-
-    # Process and batch each frequency band's data
-    #raw_segments = process_data(eeg_data, segment_length_sec, sample_rate_eeg, batch_size)
-    #gamma_segments = process_data(gamma_data, segment_length_sec, sample_rate_eeg, batch_size)
-    #beta_segments = process_data(beta_data, segment_length_sec, sample_rate_eeg, batch_size)
-    #alpha_segments = process_data(alpha_data, segment_length_sec, sample_rate_eeg, batch_size)
-    #delta_segments = process_data(delta_data, segment_length_sec, sample_rate_eeg, batch_size)
-    theta_segments = process_data(theta_data, segment_length_sec, sample_rate_eeg, batch_size)
-
-
+    segments = process_data(eeg_data, segment_length_sec, sample_rate_eeg, batch_size)
 
     return {
-        "raw": None,
-        "gamma":None,
-        "beta": None,
-        "alpha": None,
-        "delta": None,
-        "theta": theta_segments,
+        'segments': segments
     }
 
 
@@ -348,23 +337,76 @@ def load_model(model_path, model_class, *args, **kwargs):
     model.eval()  # Set the model to evaluation mode
     return model
 
+def compute_correlation_matrix(H1, H2, reg_lambda=1e-4):
+    # Subtract mean
+    H1 -= H1.mean(0, keepdim=True)
+    H2 -= H2.mean(0, keepdim=True)
 
-def check_tensor(x, name="Tensor"):
-    if torch.isnan(x).any() or torch.isinf(x).any():
-        raise ValueError(f"{name} contains NaNs or Infs.")
+    # Clipping to prevent numerical instability
+    H1 = torch.clamp(H1, min=-1e5, max=1e5)
+    H2 = torch.clamp(H2, min=-1e5, max=1e5)
+
+    # Compute covariance matrices
+    cov_H1 = torch.matmul(H1.T, H1) / (H1.size(0) - 1)
+    cov_H2 = torch.matmul(H2.T, H2) / (H2.size(0) - 1)
+    cov_H1H2 = torch.matmul(H1.T, H2) / (H1.size(0) - 1)
+
+    # Regularization
+    cov_H1 += reg_lambda * torch.eye(cov_H1.size(0), device=cov_H1.device)
+    cov_H2 += reg_lambda * torch.eye(cov_H2.size(0), device=cov_H2.device)
+
+    # Check for numerical stability
+    #if not torch.isfinite(cov_H1).all() or not torch.isfinite(cov_H2).all():
+        #raise RuntimeError("Covariance matrices contain infs or NaNs after regularization")
+
+    # Compute inverse covariance matrices
+    inv_cov_H1 = torch.linalg.inv(cov_H1)
+    inv_cov_H2 = torch.linalg.inv(cov_H2)
+
+    # Compute matrix T
+    T = torch.matmul(torch.matmul(torch.matmul(inv_cov_H1, cov_H1H2), inv_cov_H2), cov_H1H2.T)
+
+    # Check for numerical stability
+    #if not torch.isfinite(T).all():
+        #raise RuntimeError("Matrix T contains infs or NaNs before eigenvalue decomposition")
+
+    # Eigenvalue decomposition
+    eigenvalues, _ = torch.linalg.eigh(T, UPLO='L')
+
+    # Ensure eigenvalues are real and non-negative
+    real_eigenvalues = torch.clamp(eigenvalues, min=0)
+
+    # Sort eigenvalues in descending order and compute correlations
+    correlations = torch.sqrt(real_eigenvalues).sort(descending=True)[0]
+
+    # Check for numerical stability
+    #if not torch.isfinite(correlations).all():
+        #raise RuntimeError("Eigenvalues contain infs or NaNs")
+
+    return correlations
 
 
-def run_phase(subjects, audio_path, feature_extractor, eeg_net, audio_net, optimizer, loss_fn, phase='train', batch_size=256):
+def run_phase(subjects, audio_path, feature_extractor, eeg_net, audio_net, optimizer, loss_fn, phase='train',
+              batch_size=256, shuffle_eeg=False, shuffle_audio=False):
     total_loss = 0
     num_batches = 0
 
     for subject_id in subjects:
-        eeg_batches = load_and_segment_eeg(subject_id, SEGMENT_LENGTH_SEC, SAMPLE_RATE_EEG, batch_size)
-        eeg_batches = eeg_batches['theta']
+        eeg_batches = load_and_segment_eeg(subject_id, SEGMENT_LENGTH_SEC, SAMPLE_RATE_EEG, batch_size,
+                                           frequency_band='theta', transform_type='raw')
+        eeg_batches = eeg_batches['segments']
         audio_batches = segment_and_extract_features(audio_path, SEGMENT_LENGTH_SEC, SAMPLE_RATE_AUDIO,
                                                      feature_extractor, batch_size)
+        # Shuffle EEG and Audio data independently if specified
+        if shuffle_eeg:
+            random.shuffle(eeg_batches)
+        if shuffle_audio:
+            random.shuffle(audio_batches)
 
-        for eeg_batch, audio_batch in zip(eeg_batches, audio_batches):
+        # Zip EEG and audio batches together
+        combined_batches = list(zip(eeg_batches, audio_batches))
+
+        for eeg_batch, audio_batch in combined_batches:
             if phase == 'train' and optimizer:
                 optimizer.zero_grad()
 
@@ -417,22 +459,25 @@ def main():
     audio_path = '/Users/efeoztufan/Desktop/A-Thesis/Datasets/bg257f92t/audio/AllStory.wav'  # Update with actual path
 
     # Initialize networks and loss function
-    eeg_net = EEGNet()
+    transform_type = 'phase'
+    eeg_net = EEGNet(transform_type=transform_type)
     audio_net = AudioFeatureNet()
     loss_fn = DCCALoss()
     optimizer = optim.Adam(list(eeg_net.parameters()) + list(audio_net.parameters()), lr=0.001)
     # Load MelSpectrum feature extractor
-    #audio_feature_ext = MelSpectrum(SAMPLE_RATE_AUDIO)
+    audio_feature_ext = MelSpectrum(SAMPLE_RATE_AUDIO)
     #audio_feature_ext = PhaseSpectrum(SAMPLE_RATE_AUDIO)
     #audio_feature_ext = MFCCSpectrum(SAMPLE_RATE_AUDIO)
     #audio_feature_ext = SpeechEnvelope(SAMPLE_RATE_AUDIO)
-    audio_feature_ext = PhaseOfEnvelope(SAMPLE_RATE_AUDIO)
+    #audio_feature_ext = PhaseOfEnvelope(SAMPLE_RATE_AUDIO)
     #audio_feature_ext = DeltaDeltaMFCC(SAMPLE_RATE_AUDIO)
+
 
     # Adding a test phase
     for epoch in range(13):
         print(f"Epoch {epoch + 1}/{13}")
-        train_loss = run_phase(train_subjects, audio_path, audio_feature_ext, eeg_net, audio_net, optimizer, loss_fn, phase='train')
+        train_loss = run_phase(train_subjects, audio_path, audio_feature_ext, eeg_net, audio_net, optimizer, loss_fn,
+                               phase='train', shuffle_eeg=False, shuffle_audio=False)
         train_losses.append(train_loss)  # Extend the main train loss list with this epoch's losses
 
         valid_loss = run_phase(valid_subjects, audio_path, audio_feature_ext,
@@ -449,9 +494,11 @@ def main():
     print('validation losses', validation_losses)
 
     # Save the model parameters for both networks
-    torch.save(eeg_net.state_dict(), 'Analysis/DCCA-ModelsParameters/eeg_net_mel_theta_v3.pth')
-    torch.save(audio_net.state_dict(), 'Analysis/DCCA-ModelsParameters/audio_net_mel_theta_v3.pth')
+    torch.save(eeg_net.state_dict(), 'Analysis/DCCA-ModelsParameters/eeg_net_mel_theta_crossvalid.pth')
+    torch.save(audio_net.state_dict(), 'Analysis/DCCA-ModelsParameters/audio_net_mel_theta_crossvalid.pth')
     print("Models saved successfully.")
+
+
 
 
 if __name__ == "__main__":
