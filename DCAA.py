@@ -1,5 +1,4 @@
 import mne
-
 from Codes.dataPrep import Brennan2019Recording
 import librosa
 import torch
@@ -101,25 +100,19 @@ class AudioFeatureNet(nn.Module):
             nn.ReLU(),
             nn.MaxPool1d(2)  # Final reduction
         )
-        # Assume initial length = 10336 (make sure this is your actual initial length)
-        final_length = 10336 // 2 // 2 // 2  # Adjust based on the actual size after pooling
+
         self.fc_layers = nn.Sequential(
-            #nn.Linear(128 * final_length, 128),  # Ensure 256 * final_length is correct
-            nn.Linear(64 * 7, 128), #for phase, for Mel
-            #nn.Linear(2560, 128),  # for MFCC, not used anymore
+            nn.Linear(64 * 7, 128), #for phase and Mel
             #nn.Linear(64, 128), #for speech envelope
             #nn.Linear(60032, 128), #for phase of envelope
-            #nn.Linear(64, 128),  # for Delta-Delta MFCC, MFCC
+            #nn.Linear(64, 128),  # for Delta-Delta MFCC and MFCC
             nn.ReLU(),
             nn.Linear(128, 32)
         )
 
     def forward(self, x):
-        print(f"before conv: {x.shape}")
         x = self.conv_layers(x)
-        print(f"after conv: {x.shape}")
         x = x.view(x.size(0), -1)  # Flatten for FC
-        print(f"after flatten: {x.shape}")
         x = self.fc_layers(x)
         return x
 
@@ -463,7 +456,7 @@ def main():
                 'S13', 'S14', 'S15', 'S16', 'S17', 'S18', 'S19', 'S20', 'S21', 'S22', 'S23', 'S24',
                 'S25', 'S26', 'S27', 'S28', 'S29', 'S30', 'S31', 'S32', 'S33', 'S34', 'S35', 'S36',
                 'S37', 'S38', 'S39', 'S40', 'S41', 'S42']
-    bads = ["S24", "S26", "S27", "S30", "S32", "S34", "S35", "S36", "S02", "S25"]  # S25 not bad use later
+    bads = ["S24", "S26", "S27", "S30", "S32", "S34", "S35", "S36", "S02", "S25","S07"]  # S25,S07 not bad use later
     subjects = [s for s in subjects if s not in bads]
     random.shuffle(subjects)
     train_subjects = subjects[:23]
