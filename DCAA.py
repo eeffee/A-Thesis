@@ -431,6 +431,23 @@ def run_phase(subjects, audio_path, feature_extractor, eeg_net, audio_net, optim
     return average_loss
 
 
+def save_combined_results(correlation_matrix, average_correlation, output_path):
+    """
+    Save the correlation matrix and the average correlation in a single structured file.
+    """
+    # Create a structured dictionary
+    results = {
+        'correlation_matrix': correlation_matrix.numpy(),  # Convert to NumPy array
+        'average_correlation': average_correlation.item()  # Store as a single float value
+    }
+
+    # Use NumPy save with allow_pickle=True to handle dictionary
+    np.save(output_path, results, allow_pickle=True)
+    print(f"Combined correlation data saved successfully at {output_path}")
+
+
+
+
 # Define constants and parameters
 SAMPLE_RATE_AUDIO = 44100  # Audio sample rate
 SAMPLE_RATE_EEG = 500  # EEG sample rate
@@ -493,10 +510,53 @@ def main():
     print('train losses:', train_losses)
     print('validation losses', validation_losses)
 
+    path_eegnet_params = 'Analysis/DCCA-ModelsParameters/eeg_net_mel_theta_crossvalid.pth'
+    path_audionet_params = 'Analysis/DCCA-ModelsParameters/audio_net_mel_theta_crossvalid.pth'
     # Save the model parameters for both networks
-    torch.save(eeg_net.state_dict(), 'Analysis/DCCA-ModelsParameters/eeg_net_mel_theta_crossvalid.pth')
-    torch.save(audio_net.state_dict(), 'Analysis/DCCA-ModelsParameters/audio_net_mel_theta_crossvalid.pth')
+    torch.save(eeg_net.state_dict(), path_eegnet_params)
+    torch.save(audio_net.state_dict(), path_audionet_params)
     print("Models saved successfully.")
+
+    # Load the latest model
+    eeg_net_loaded = EEGNet(transform_type='phase')
+    audio_net_loaded = AudioFeatureNet()
+    eeg_net_loaded.load_state_dict(torch.load(path_eegnet_params))
+    audio_net_loaded.load_state_dict(torch.load(path_audionet_params))
+    eeg_net_loaded.eval()
+    audio_net_loaded.eval()
+
+    # Load and process data for subject 'S25'
+    subject_id = 'S25'
+    eeg_batches = load_and_segment_eeg(subject_id, SEGMENT_LENGTH_SEC, SAMPLE_RATE_EEG, batch_size=256, frequency_band='theta',
+                         transform_type='raw')['segments']
+    audio_batches = segment_and_extract_features(audio_path, SEGMENT_LENGTH_SEC, SAMPLE_RATE_AUDIO, audio_feature_ext,
+                                                 batch_size=256)
+
+    # Accumulate and average features over all batches
+    all_eeg_features = []
+    all_audio_features = []
+    for eeg_batch, audio_batch in zip(eeg_batches, audio_batches):
+        eeg_features = eeg_net_loaded(eeg_batch)
+        audio_features = audio_net_loaded(audio_batch)
+        all_eeg_features.append(eeg_features)
+        all_audio_features.append(audio_features)
+
+    # Concatenate all features and compute the mean across batches
+    mean_eeg_features = torch.cat(all_eeg_features).mean(dim=0)
+    mean_audio_features = torch.cat(all_audio_features).mean(dim=0)
+
+    # Compute correlation matrix
+    correlations = compute_correlation_matrix(mean_eeg_features, mean_audio_features)
+    average_correlation = torch.mean(correlations)
+
+    # Print the average canonical correlations
+    print("Average Canonical Correlations (Mel-Theta):", average_correlation.item())
+
+    # Example usage
+    combined_output_path = 'Analysis/DCCA-ModelsParameters/correlation_theta_mel_phase.npy'
+    save_combined_results(correlations, average_correlation, combined_output_path)
+
+    print("Correlation output saved successfully.")
 
 
 
