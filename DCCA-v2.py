@@ -12,7 +12,7 @@ from scipy.signal import resample, hilbert
 
 configurations = {
     'eeg_conditions': ['raw', 'phase'],
-    'frequency_bands': ['theta', 'gamma', 'delta', 'beta'],
+    'frequency_bands': ['theta', 'gamma', 'delta', 'beta', 'speech'],
     'audio_features': {
         'Mel': MelSpectrum,
         'Phase': PhaseSpectrum,
@@ -23,11 +23,11 @@ configurations = {
     },
     'output_paths': {
         'model': '/Users/efeoztufan/Desktop/A-Thesis/test/models/',
-        'training': '/Users/efeoztufan/Desktop/A-Thesis/test//trainresults/',
+        'training': '/Users/efeoztufan/Desktop/A-Thesis/test/trainresults/',
         'evaluation': '/Users/efeoztufan/Desktop/A-Thesis/test/evalresults/'
     },
     'audio_path': '/Users/efeoztufan/Desktop/A-Thesis/Datasets/bg257f92t/audio/AllStory.wav',
-    'data_path': 'path/to/data/'
+    'data_path': 'data/'
 }
 
 # Define constants and parameters
@@ -125,16 +125,36 @@ class EEGNet(nn.Module):
         # After first pool: 7500
         # After second pool: 3750
         # Calculate output size based on transform_type
+        print(transform_type)
         if transform_type == 'raw':
             output_size = 64 * 937  # The final sequence length after pooling is 937
         elif transform_type == 'phase':
             output_size = 120000  # Adjust this based on the actual length post-transformations for phase
-
+        print(output_size)
         self.fc_layers = nn.Sequential(
             nn.Linear(output_size, 128),
             nn.ReLU(),
             nn.Linear(128, 32)
         )
+
+
+    def forward(self, x):
+        # Ensure the tensor is properly shaped
+        print('before network' + x.shape )
+        if x.dim() == 4 and x.shape[1] == 1:  # Assuming unnecessary singleton dimension present
+            x = x.squeeze(1)  # Remove the singleton dimension
+        # Now unpack the dim
+        #ensions
+        batch_size, num_channels, L = x.shape
+        x = self.conv_layers(x)
+        print('after CN network' + x.shape)
+        x = x.view(x.size(0), -1)  # Flatten the output
+        print('before flattening' + x.shape)
+        x = self.fc_layers(x)
+        print('after FC' + x.shape)
+        #x = x.view(batch_size, -1).mean(dim=1)  # Average the outputs across batches if needed
+        return x
+
 
 #transform_type = can be raw or phase, frequency bands are theta, gamma, delta, speech
 def load_and_segment_eeg(subject_id, segment_length_sec, sample_rate_eeg, batch_size=256, frequency_band=None, transform_type=None):
@@ -283,7 +303,7 @@ def segment_and_extract_features(audio_path, segment_length_sec, sample_rate_aud
 class DCCALoss(torch.nn.Module):
     def __init__(self, use_all_singular_values=False, outdim_size=1):
         super(DCCALoss, self).__init__()
-        self.device = 'cpu'
+        self.device = 'gpu'
         self.use_all_singular_values = use_all_singular_values
         self.outdim_size = outdim_size
 
@@ -333,12 +353,12 @@ class DCCALoss(torch.nn.Module):
 
         return -corr
 
-def run_phase(subjects, audio_path, feature_extractor, eeg_net, audio_net, optimizer, loss_fn, phase, batch_size):
+def run_phase(subjects, audio_path, feature_extractor, eeg_net, audio_net, optimizer, loss_fn, phase, batch_size,frequency_band,eeg_condition):
     total_loss = 0.0
     num_batches = 0
 
     for subject_id in subjects:
-        eeg_batches = load_and_segment_eeg(subject_id, SEGMENT_LENGTH_SEC, SAMPLE_RATE_EEG, batch_size, None, 'raw')['segments']
+        eeg_batches = load_and_segment_eeg(subject_id, SEGMENT_LENGTH_SEC, SAMPLE_RATE_EEG, batch_size, frequency_band, eeg_condition)['segments']
         audio_batches = segment_and_extract_features(audio_path, SEGMENT_LENGTH_SEC, SAMPLE_RATE_AUDIO, feature_extractor, batch_size)
 
         for eeg_batch, audio_batch in zip(eeg_batches, audio_batches):
@@ -375,16 +395,19 @@ def train_model(eeg_net, audio_net, loss_fn, optimizer, train_subjects, valid_su
             print(f"Epoch {epoch + 1}/{num_epochs}")
 
             # Training phase
-            train_loss = run_phase(train_subjects, audio_path, feature_extractor, eeg_net, audio_net, optimizer, loss_fn, 'train', batch_size)
+            train_loss = run_phase(train_subjects, audio_path, feature_extractor, eeg_net, audio_net, optimizer,
+                                   loss_fn, 'train', batch_size,band,condition)
 
             # Validation phase
-            valid_loss = run_phase(valid_subjects, audio_path, feature_extractor, eeg_net, audio_net, None, loss_fn, 'validate', batch_size)
+            valid_loss = run_phase(valid_subjects, audio_path, feature_extractor, eeg_net, audio_net, None,
+                                   loss_fn, 'validate', batch_size, band, condition)
             file.write(f'Epoch {epoch + 1}: Training Loss = {train_loss}, Validation Loss = {valid_loss}\n')
 
 
             # Optionally run a testing phase after the last training epoch
             if test_subjects:
-                test_loss = run_phase(test_subjects, audio_path, feature_extractor, eeg_net, audio_net, None, loss_fn, 'test', batch_size)
+                test_loss = run_phase(test_subjects, audio_path, feature_extractor, eeg_net, audio_net, None,
+                                      loss_fn, 'test', batch_size, band, condition)
                 file.write(f'Final Test Loss = {test_loss}\n')
 
             # Log average losses for this configuration
@@ -447,13 +470,26 @@ def save_model_parameters(eeg_net, audio_net, condition, band, feature_name, con
     print(f"EEG model parameters saved to {eeg_model_path}")
     print(f"Audio model parameters saved to {audio_model_path}")
 
+def ensure_directories_exist(configurations):
+    for path in configurations['output_paths'].values():
+        os.makedirs(path, exist_ok=True)
+
 
 def run_full_analysis(configurations):
     # Set random seed for reproducibility, manage subject lists, etc.
     random.seed(42)
     torch.manual_seed(42)
 
-    subjects = [...]  # Define full list of subjects
+    # Call this function at the start of your `run_full_analysis`
+    ensure_directories_exist(configurations)
+
+    subjects = ['S01', 'S02', 'S03', 'S04', 'S05', 'S06', 'S07', 'S08', 'S09', 'S10', 'S11', 'S12',
+                'S13', 'S14', 'S15', 'S16', 'S17', 'S18', 'S19', 'S20', 'S21', 'S22', 'S23', 'S24',
+                'S25', 'S26', 'S27', 'S28', 'S29', 'S30', 'S31', 'S32', 'S33', 'S34', 'S35', 'S36',
+                'S37', 'S38', 'S39', 'S40', 'S41', 'S42']
+    bads = ["S24", "S26", "S27", "S30", "S32", "S34", "S35", "S36", "S02", "S25", "S07"]  # S25,S07 not bad use later
+    subjects = [s for s in subjects if s not in bads]
+    random.shuffle(subjects)
     train_subjects = subjects[:23]
     valid_subjects = subjects[23:28]
     test_subjects = subjects[28:]
@@ -483,5 +519,12 @@ def run_full_analysis(configurations):
                 # Evaluate on specific subjects
                 evaluate_model(configurations, condition, band, feature_name, subjects_to_evaluate)
 
+def main():
+    print(ensure_directories_exist(configurations))
+    run_full_analysis(configurations)
+
+
+if __name__ == "__main__":
+    main()
 
 
