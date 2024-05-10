@@ -14,7 +14,7 @@ from torchaudio.transforms import Resample
 from scipy.io import wavfile
 
 configurations = {
-    'eeg_conditions': ['phase', 'raw'],
+    'eeg_conditions': ['raw', 'phase'],
     'frequency_bands': ['theta', 'gamma', 'delta', 'beta', 'speech'],
     'audio_features': {
         'Mel': MelSpectrum,
@@ -132,7 +132,7 @@ class EEGNet(nn.Module):
         if transform_type == 'raw':
             output_size = 64 * 937  # The final sequence length after pooling is 937
         elif transform_type == 'phase':
-            output_size = 120000  # Adjust this based on the actual length post-transformations for phase
+            output_size = 64 * 937 # Adjust this based on the actual length post-transformations for phase
         self.fc_layers = nn.Sequential(
             nn.Linear(output_size, 128),
             nn.ReLU(),
@@ -159,6 +159,12 @@ def load_and_segment_eeg(subject_id, segment_length_sec, sample_rate_eeg, batch_
     recording = Brennan2019Recording(subject_uid=subject_id, recording_uid=None)
     eeg_raw = recording._load_raw()  # Load EEG data
     eeg_data = eeg_raw.get_data()
+    sample_rate_eeg = 250
+    # Resample post-PCA if needed
+    if eeg_raw.info['sfreq'] != sample_rate_eeg:
+        num_samples = eeg_data.shape[0]
+        new_num_samples = int(num_samples * sample_rate_eeg / eeg_raw.info['sfreq'])
+        eeg_data = resample(eeg_data, new_num_samples, axis=0)
 
     # Frequency bands
     freq_bands = {
@@ -223,24 +229,24 @@ class AudioFeatureNet(nn.Module):
         # Define convolutional layer sizes based on feature type
         if feature_type == 'Mel':
             input_channels = 40  # Example, adjust as necessary
-            #post_conv_size = 64 * 7  # Adjust based on the output size after conv layers
-            post_conv_size = 64 * 1292
+            post_conv_size = 64 * 7  # Adjust based on the output size after conv layers
+            #post_conv_size = 64 * 1292
         elif feature_type == 'Phase':
             input_channels = 257
-            #post_conv_size = 64 * 7
-            post_conv_size = 64 * 1292
+            post_conv_size = 64 * 7
+            #post_conv_size = 64 * 1292
         elif feature_type in ['MFCC', 'DeltaDeltaMFCC']:
             input_channels = 13
-            #post_conv_size = 64
-            post_conv_size= 64 * 161
+            post_conv_size = 64
+            #post_conv_size= 64 * 161
         elif feature_type == 'Envelope':
             input_channels = 1
-            #post_conv_size = 64
-            post_conv_size = 128
+            post_conv_size = 64
+            #post_conv_size = 128
         elif feature_type == 'PhaseOfEnvelope':
             input_channels = 1
-            #post_conv_size = 60032  # Example, adjust based on actual size
-            post_conv_size = 165375 * 64
+            post_conv_size = 60032  # Example, adjust based on actual size
+            #post_conv_size = 165375 * 64
 
 
             # Configure convolutional layers
@@ -290,6 +296,7 @@ def segment_and_extract_features(audio_path, segment_length_sec, sample_rate_aud
         num_samples = audio.shape[0]
         new_num_samples = int(num_samples * sample_rate_audio / sr)
         audio = resample(audio, new_num_samples, axis=0)
+        sr = 250
     samples_per_segment = int(segment_length_sec * sr)
 
     segments = [audio[i:i + samples_per_segment] for i in range(0, len(audio), samples_per_segment)]
