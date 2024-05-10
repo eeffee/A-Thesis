@@ -9,17 +9,19 @@ import os
 import random
 from sklearn.decomposition import PCA
 from scipy.signal import resample, hilbert
+import soundfile as sf
+from scipy.signal import resample_poly
 
 configurations = {
     'eeg_conditions': ['raw', 'phase'],
     'frequency_bands': ['theta', 'gamma', 'delta', 'beta', 'speech'],
     'audio_features': {
+        'PhaseOfEnvelope': PhaseOfEnvelope,
         'Mel': MelSpectrum,
         'Phase': PhaseSpectrum,
         'MFCC': MFCCSpectrum,
         'DeltaDeltaMFCC': DeltaDeltaMFCC,
-        'SpeechEnvelope': SpeechEnvelope,
-        'PhaseOfEnvelope': PhaseOfEnvelope
+        'Envelope': SpeechEnvelope,
     },
     'output_paths': {
         'model': '/Users/efeoztufan/Desktop/A-Thesis/test/models/',
@@ -140,18 +142,18 @@ class EEGNet(nn.Module):
 
     def forward(self, x):
         # Ensure the tensor is properly shaped
-        print('before network' + x.shape )
+        print(x.shape )
         if x.dim() == 4 and x.shape[1] == 1:  # Assuming unnecessary singleton dimension present
             x = x.squeeze(1)  # Remove the singleton dimension
         # Now unpack the dim
         #ensions
         batch_size, num_channels, L = x.shape
         x = self.conv_layers(x)
-        print('after CN network' + x.shape)
+        print(x.shape)
         x = x.view(x.size(0), -1)  # Flatten the output
-        print('before flattening' + x.shape)
+        print(x.shape)
         x = self.fc_layers(x)
-        print('after FC' + x.shape)
+        print(x.shape)
         #x = x.view(batch_size, -1).mean(dim=1)  # Average the outputs across batches if needed
         return x
 
@@ -184,6 +186,7 @@ def load_and_segment_eeg(subject_id, segment_length_sec, sample_rate_eeg, batch_
     # Apply PCA
     eeg_data = apply_pca_to_eeg_data(eeg_data)
 
+    sample_rate_eeg = 250
     # Resample post-PCA if needed
     if eeg_raw.info['sfreq'] != sample_rate_eeg:
         num_samples = eeg_data.shape[0]
@@ -225,16 +228,20 @@ class AudioFeatureNet(nn.Module):
         # Define convolutional layer sizes based on feature type
         if feature_type == 'Mel':
             input_channels = 40  # Example, adjust as necessary
-            post_conv_size = 64 * 7  # Adjust based on the output size after conv layers
+            #post_conv_size = 64 * 7  # Adjust based on the output size after conv layers
+            post_conv_size = 64 * 1292
         elif feature_type == 'Phase':
             input_channels = 257
-            post_conv_size = 64 * 7
+            #post_conv_size = 64 * 7
+            post_conv_size = 64 * 1292
         elif feature_type in ['MFCC', 'DeltaDeltaMFCC']:
             input_channels = 13
-            post_conv_size = 64
+            #post_conv_size = 64
+            post_conv_size= 64 * 161
         elif feature_type == 'Envelope':
             input_channels = 1
-            post_conv_size = 64
+            #post_conv_size = 64
+            post_conv_size = 128
         elif feature_type == 'PhaseOfEnvelope':
             input_channels = 1
             post_conv_size = 60032  # Example, adjust based on actual size
@@ -263,16 +270,29 @@ class AudioFeatureNet(nn.Module):
         )
 
     def forward(self, x):
-        x = self.conv_layers(x)
-        x = x.view(x.size(0), -1)  # Flatten for FC
+        print("Initial shape:", x.shape)
+        x = self.conv_layers[0:3](x)  # Up to first pooling
+        if x.shape[-1] > 2:
+            x = self.conv_layers[3:6](x)  # Next conv and pooling
+        if x.shape[-1] > 2:
+            x = self.conv_layers[6:](x)  # Final layers
+        print("Post-conv shape:", x.shape)
+        x = x.view(x.size(0), -1)
+        print("Flattened shape:", x.shape)
         x = self.fc_layers(x)
         return x
 
 def segment_and_extract_features(audio_path, segment_length_sec, sample_rate_audio, feature_extractor, batch_size=256):
-    audio, sr = librosa.load(audio_path, sr=sample_rate_audio)
-    if sr != 250:
-        audio = librosa.resample(audio, orig_sr=sr, target_sr=250)
-        sr = 250
+
+
+    # Load audio data using soundfile
+    audio, sr = sf.read(audio_path)
+    target_sample =250
+    # Check if the sampling frequency is not equal to 250 Hz
+    if sr != sample_rate_audio:
+        # Resample the audio data to 250 Hz using scipy
+        audio = resample_poly(audio, target_sample, sr, axis=0)
+        sr = sample_rate_audio
 
     samples_per_segment = int(segment_length_sec * sr)
 
