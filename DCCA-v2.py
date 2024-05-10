@@ -9,19 +9,20 @@ import os
 import random
 from sklearn.decomposition import PCA
 from scipy.signal import resample, hilbert
-import soundfile as sf
-from scipy.signal import resample_poly
+import torchaudio
+from torchaudio.transforms import Resample
+from scipy.io import wavfile
 
 configurations = {
-    'eeg_conditions': ['raw', 'phase'],
+    'eeg_conditions': ['phase', 'raw'],
     'frequency_bands': ['theta', 'gamma', 'delta', 'beta', 'speech'],
     'audio_features': {
-        'PhaseOfEnvelope': PhaseOfEnvelope,
         'Mel': MelSpectrum,
         'Phase': PhaseSpectrum,
         'MFCC': MFCCSpectrum,
         'DeltaDeltaMFCC': DeltaDeltaMFCC,
         'Envelope': SpeechEnvelope,
+        'PhaseOfEnvelope': PhaseOfEnvelope,
     },
     'output_paths': {
         'model': '/Users/efeoztufan/Desktop/A-Thesis/test/models/',
@@ -132,7 +133,6 @@ class EEGNet(nn.Module):
             output_size = 64 * 937  # The final sequence length after pooling is 937
         elif transform_type == 'phase':
             output_size = 120000  # Adjust this based on the actual length post-transformations for phase
-        print(output_size)
         self.fc_layers = nn.Sequential(
             nn.Linear(output_size, 128),
             nn.ReLU(),
@@ -142,18 +142,13 @@ class EEGNet(nn.Module):
 
     def forward(self, x):
         # Ensure the tensor is properly shaped
-        print(x.shape )
         if x.dim() == 4 and x.shape[1] == 1:  # Assuming unnecessary singleton dimension present
             x = x.squeeze(1)  # Remove the singleton dimension
-        # Now unpack the dim
-        #ensions
+        # Now unpack the dimensions
         batch_size, num_channels, L = x.shape
         x = self.conv_layers(x)
-        print(x.shape)
         x = x.view(x.size(0), -1)  # Flatten the output
-        print(x.shape)
         x = self.fc_layers(x)
-        print(x.shape)
         #x = x.view(batch_size, -1).mean(dim=1)  # Average the outputs across batches if needed
         return x
 
@@ -244,9 +239,11 @@ class AudioFeatureNet(nn.Module):
             post_conv_size = 128
         elif feature_type == 'PhaseOfEnvelope':
             input_channels = 1
-            post_conv_size = 60032  # Example, adjust based on actual size
+            #post_conv_size = 60032  # Example, adjust based on actual size
+            post_conv_size = 165375 * 64
 
-        # Configure convolutional layers
+
+            # Configure convolutional layers
         self.conv_layers = nn.Sequential(
             nn.Conv1d(input_channels, 64, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm1d(64),
@@ -284,16 +281,15 @@ class AudioFeatureNet(nn.Module):
 
 def segment_and_extract_features(audio_path, segment_length_sec, sample_rate_audio, feature_extractor, batch_size=256):
 
-
-    # Load audio data using soundfile
-    audio, sr = sf.read(audio_path)
-    target_sample =250
+    # Load audio data
+    sr, audio = wavfile.read(audio_path)
     # Check if the sampling frequency is not equal to 250 Hz
-    if sr != sample_rate_audio:
-        # Resample the audio data to 250 Hz using scipy
-        audio = resample_poly(audio, target_sample, sr, axis=0)
-        sr = sample_rate_audio
-
+    sample_rate_audio = 250
+    # Resample post-PCA if needed
+    if sr != 250:
+        num_samples = audio.shape[0]
+        new_num_samples = int(num_samples * sample_rate_audio / sr)
+        audio = resample(audio, new_num_samples, axis=0)
     samples_per_segment = int(segment_length_sec * sr)
 
     segments = [audio[i:i + samples_per_segment] for i in range(0, len(audio), samples_per_segment)]
