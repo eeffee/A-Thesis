@@ -1,10 +1,10 @@
 import mne
-from Codes.dataPrep import Brennan2019Recording
+from dataPrep import Brennan2019Recording
 import librosa
 import torch
 from torch import nn, optim
 import numpy as np
-from Codes.models import MelSpectrum, PhaseSpectrum, MFCCSpectrum, SpeechEnvelope, PhaseOfEnvelope,DeltaDeltaMFCC
+from models import MelSpectrum, PhaseSpectrum, MFCCSpectrum, SpeechEnvelope, PhaseOfEnvelope,DeltaDeltaMFCC
 import os
 import random
 from sklearn.decomposition import PCA
@@ -25,11 +25,13 @@ configurations = {
         'PhaseOfEnvelope': PhaseOfEnvelope,
     },
     'output_paths': {
-        'model': '/Users/efeoztufan/Desktop/A-Thesis/test/models/',
-        'training': '/Users/efeoztufan/Desktop/A-Thesis/test/trainresults/',
-        'evaluation': '/Users/efeoztufan/Desktop/A-Thesis/test/evalresults/'
+        'model': '/home/oztufan/resultsDCCA/models/',
+        'training': '/home/oztufan/resultsDCCA/trainresults/',
+        'evaluation': '/home/oztufan/resultsDCCA/evalresults/',
+        'eeg' : '/home/oztufan/resultsDCCA/eeg',
+        'audio' : '/home/oztufan/resultsDCCA/audio'
     },
-    'audio_path': '/Users/efeoztufan/Desktop/A-Thesis/Datasets/bg257f92t/audio/AllStory.wav',
+    'audio_path': '/home/oztufan/bg257f92t/audio/AllStory.wav',
     'data_path': 'data/'
 }
 
@@ -49,51 +51,57 @@ def extract_phase(data):
     phase_data = np.angle(analytic_signal)
     return phase_data
 
-def compute_correlation_matrix(H1, H2, reg_lambda=1e-4):
-    # Subtract mean
-    H1 -= H1.mean(0, keepdim=True)
-    H2 -= H2.mean(0, keepdim=True)
+def compute_correlation_matrix(H1, H2, reg_lambda=1e-6):
+    # Validate input tensors for proper dimensions and non-emptiness
+    if H1.nelement() == 0 or H2.nelement() == 0 or H1.dim() != 2 or H2.dim() != 2:
+        print("Error: Invalid input tensors. Ensure they are not empty and are 2-dimensional.")
+        return torch.tensor([])
 
-    # Clipping to prevent numerical instability
-    H1 = torch.clamp(H1, min=-1e5, max=1e5)
-    H2 = torch.clamp(H2, min=-1e5, max=1e5)
+    # Check if there are enough data points for covariance calculation
+    if H1.size(0) < 2 or H2.size(0) < 2:
+        print("Error: Not enough data points for covariance calculation.")
+        return torch.tensor([])
+
+    # Normalize data to prevent numerical instability
+    H1 = (H1 - H1.mean(dim=0, keepdim=True)) / H1.std(dim=0, keepdim=True)
+    H2 = (H2 - H2.mean(dim=0, keepdim=True)) / H2.std(dim=0, keepdim=True)
 
     # Compute covariance matrices
     cov_H1 = torch.matmul(H1.T, H1) / (H1.size(0) - 1)
     cov_H2 = torch.matmul(H2.T, H2) / (H2.size(0) - 1)
-    cov_H1H2 = torch.matmul(H1.T, H2) / (H1.size(0) - 1)
 
-    # Regularization
-    cov_H1 += reg_lambda * torch.eye(cov_H1.size(0), device=cov_H1.device)
-    cov_H2 += reg_lambda * torch.eye(cov_H2.size(0), device=cov_H2.device)
+    # Regularization to add numerical stability to the matrix inversion
+    eye_H1 = torch.eye(cov_H1.size(0), device=cov_H1.device) * reg_lambda
+    eye_H2 = torch.eye(cov_H2.size(0), device=cov_H2.device) * reg_lambda
 
-    # Check for numerical stability
-    #if not torch.isfinite(cov_H1).all() or not torch.isfinite(cov_H2).all():
-        #raise RuntimeError("Covariance matrices contain infs or NaNs after regularization")
+    # Compute inverse covariance matrices with additional stability
+    inv_cov_H1 = torch.linalg.inv(cov_H1 + eye_H1)
+    inv_cov_H2 = torch.linalg.inv(cov_H2 + eye_H2)
 
-    # Compute inverse covariance matrices
-    inv_cov_H1 = torch.linalg.inv(cov_H1)
-    inv_cov_H2 = torch.linalg.inv(cov_H2)
+    # Check for NaN after inversion
+    if torch.isnan(inv_cov_H1).any() or torch.isnan(inv_cov_H2).any():
+        print("Error: NaN values encountered in matrix inversion.")
+        return torch.tensor([])
 
-    # Compute matrix T
-    T = torch.matmul(torch.matmul(torch.matmul(inv_cov_H1, cov_H1H2), inv_cov_H2), cov_H1H2.T)
+    # Compute correlation matrix T
+    T = torch.matmul(torch.matmul(inv_cov_H1, cov_H1), inv_cov_H2)
 
-    # Check for numerical stability
-    #if not torch.isfinite(T).all():
-        #raise RuntimeError("Matrix T contains infs or NaNs before eigenvalue decomposition")
+    # Eigenvalue decomposition to find correlations
+    eigenvalues, _ = torch.linalg.eigh(T)
 
-    # Eigenvalue decomposition
-    eigenvalues, _ = torch.linalg.eigh(T, UPLO='L')
-
-    # Ensure eigenvalues are real and non-negative
+    # Ensure eigenvalues are real and non-negative, handle NaN in eigenvalues
     real_eigenvalues = torch.clamp(eigenvalues, min=0)
+    if torch.isnan(real_eigenvalues).any():
+        print("Error: NaN values encountered in eigenvalue computation.")
+        return torch.tensor([])
 
     # Sort eigenvalues in descending order and compute correlations
-    correlations = torch.sqrt(real_eigenvalues).sort(descending=True)[0]
+    correlations = torch.sqrt(real_eigenvalues).sort(descending=True).values
 
-    # Check for numerical stability
-    #if not torch.isfinite(correlations).all():
-        #raise RuntimeError("Eigenvalues contain infs or NaNs")
+    # Diagnostic prints (optional, can be removed after debugging is complete)
+    print("Covariance Matrix H1:", cov_H1)
+    print("Inverse Covariance Matrix H1:", inv_cov_H1)
+    print("Correlations:", correlations)
 
     return correlations
 
@@ -326,7 +334,7 @@ def segment_and_extract_features(audio_path, segment_length_sec, sample_rate_aud
 class DCCALoss(torch.nn.Module):
     def __init__(self, use_all_singular_values=False, outdim_size=1):
         super(DCCALoss, self).__init__()
-        self.device = 'gpu'
+        self.device = 'cpu'
         self.use_all_singular_values = use_all_singular_values
         self.outdim_size = outdim_size
 
@@ -420,12 +428,13 @@ def train_model(eeg_net, audio_net, loss_fn, optimizer, train_subjects, valid_su
             # Training phase
             train_loss = run_phase(train_subjects, audio_path, feature_extractor, eeg_net, audio_net, optimizer,
                                    loss_fn, 'train', batch_size,band,condition)
+            train_losses.append(train_loss)
 
             # Validation phase
             valid_loss = run_phase(valid_subjects, audio_path, feature_extractor, eeg_net, audio_net, None,
                                    loss_fn, 'validate', batch_size, band, condition)
             file.write(f'Epoch {epoch + 1}: Training Loss = {train_loss}, Validation Loss = {valid_loss}\n')
-
+            validation_losses.append(valid_loss)
 
             # Optionally run a testing phase after the last training epoch
             if test_subjects:
@@ -446,8 +455,8 @@ def evaluate_model(configurations, condition, band, feature_name, subjects):
     # Load the models
     eeg_net = EEGNet(transform_type=condition)
     audio_net = AudioFeatureNet(feature_type=feature_name)  # ensure this aligns with your updated class definition
-    eeg_net.load_state_dict(torch.load(configurations['model_paths']['eeg']))
-    audio_net.load_state_dict(torch.load(configurations['model_paths']['audio']))
+    eeg_net.load_state_dict(torch.load(configurations['output_paths']['eeg']))
+    audio_net.load_state_dict(torch.load(configurations['output_paths']['audio']))
     eeg_net.eval()
     audio_net.eval()
 
@@ -484,10 +493,12 @@ def evaluate_model(configurations, condition, band, feature_name, subjects):
         print(f"Average correlation ({average_correlation}) saved to {summary_output_path}.")
 
 def save_model_parameters(eeg_net, audio_net, condition, band, feature_name, configurations):
-    model_base_path = configurations['output_paths']['model']
-    os.makedirs(model_base_path, exist_ok=True)
-    eeg_model_path = os.path.join(model_base_path, f"{condition}_{band}_{feature_name}_eeg_net.pth")
-    audio_model_path = os.path.join(model_base_path, f"{condition}_{band}_{feature_name}_audio_net.pth")
+    eeg_base_path = configurations['output_paths']['eeg']
+    audio_base_path = configurations['output_paths']['audio']
+    os.makedirs(eeg_base_path, exist_ok=True)
+    os.makedirs(audio_base_path, exist_ok=True)
+    eeg_model_path = os.path.join(eeg_base_path, f"{condition}_{band}_{feature_name}_eeg_net.pth")
+    audio_model_path = os.path.join(audio_base_path, f"{condition}_{band}_{feature_name}_audio_net.pth")
     torch.save(eeg_net.state_dict(), eeg_model_path)
     torch.save(audio_net.state_dict(), audio_model_path)
     print(f"EEG model parameters saved to {eeg_model_path}")
@@ -532,11 +543,11 @@ def run_full_analysis(configurations):
                 audio_path = configurations['audio_path']
 
                 # Train model
-                train_model(eeg_net, audio_net, loss_fn, optimizer, train_subjects, valid_subjects, test_subjects, feature_extractor, condition, band, feature_name, audio_path, 256, 13)
+                train_model(eeg_net, audio_net, loss_fn, optimizer, train_subjects, valid_subjects, test_subjects, feature_extractor, condition, band, feature_name, audio_path, 256, 1)
 
                 # Save models
-                torch.save(eeg_net.state_dict(), configurations['model_paths']['eeg'])
-                torch.save(audio_net.state_dict(), configurations['model_paths']['audio'])
+                torch.save(eeg_net.state_dict(), configurations['output_paths']['eeg'])
+                torch.save(audio_net.state_dict(), configurations['output_paths']['audio'])
                 print("Models saved successfully for", condition, band, feature_name)
 
                 # Evaluate on specific subjects
