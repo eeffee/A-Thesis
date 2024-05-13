@@ -28,8 +28,8 @@ configurations = {
         'model': '/home/oztufan/resultsDCCA/models/',
         'training': '/home/oztufan/resultsDCCA/trainresults/',
         'evaluation': '/home/oztufan/resultsDCCA/evalresults/',
-        'eeg' : '/home/oztufan/resultsDCCA/eeg',
-        'audio' : '/home/oztufan/resultsDCCA/audio'
+        'eeg' : '/home/oztufan/resultsDCCA/eeg/',
+        'audio' : '/home/oztufan/resultsDCCA/audio/'
     },
     'audio_path': '/home/oztufan/bg257f92t/audio/AllStory.wav',
     'data_path': 'data/'
