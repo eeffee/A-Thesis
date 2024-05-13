@@ -28,7 +28,7 @@ configurations = {
         'model': '/home/oztufan/resultsDCCA/models/',
         'training': '/home/oztufan/resultsDCCA/trainresults/',
         'evaluation': '/home/oztufan/resultsDCCA/evalresults/',
-        'eeg' : '/home/oztufan/resultsDCCA/eeg/',
+        'eeg' : '/home/oztufan/resultsDCCA/test/eeg/',
         'audio' : '/home/oztufan/resultsDCCA/audio/'
     },
     'audio_path': '/home/oztufan/bg257f92t/audio/AllStory.wav',
@@ -119,15 +119,15 @@ class EEGNet(nn.Module):
         self.conv_layers = nn.Sequential(
             nn.Conv1d(input_channels, 128, kernel_size=3, padding=1),  # Convolution over time for each channel
             nn.BatchNorm1d(128),  # Batch normalization
-            nn.ReLU(),
+            nn.Sigmoid(),
             nn.MaxPool1d(2),  # Reduce dimensionality
             nn.Conv1d(128, 128, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.MaxPool1d(2),  # Further reduction by factor of 4
+            nn.Sigmoid(),
+            nn.MaxPool1d(2),  # Further reduction by factor of 2
             nn.Conv1d(128, 64, kernel_size=3, padding=1),
             nn.BatchNorm1d(64),
-            nn.ReLU(),
+            nn.Sigmoid(),
             nn.MaxPool1d(2)
         )
         # Calculate size after convolutions
@@ -143,7 +143,7 @@ class EEGNet(nn.Module):
             output_size = 64 * 937 # Adjust this based on the actual length post-transformations for phase
         self.fc_layers = nn.Sequential(
             nn.Linear(output_size, 128),
-            nn.ReLU(),
+            nn.Sigmoid(),
             nn.Linear(128, 32)
         )
 
@@ -237,23 +237,23 @@ class AudioFeatureNet(nn.Module):
         # Define convolutional layer sizes based on feature type
         if feature_type == 'Mel':
             input_channels = 40  # Example, adjust as necessary
-            post_conv_size = 64 * 7  # Adjust based on the output size after conv layers
+            #post_conv_size = 64 * 7  # Adjust based on the output size after conv layers
             #post_conv_size = 64 * 1292
         elif feature_type == 'Phase':
             input_channels = 257
-            post_conv_size = 64 * 7
+            #post_conv_size = 64 * 7
             #post_conv_size = 64 * 1292
         elif feature_type in ['MFCC', 'DeltaDeltaMFCC']:
             input_channels = 13
-            post_conv_size = 64
+            #post_conv_size = 64
             #post_conv_size= 64 * 161
         elif feature_type == 'Envelope':
             input_channels = 1
-            post_conv_size = 64
+            #post_conv_size = 64
             #post_conv_size = 128
         elif feature_type == 'PhaseOfEnvelope':
             input_channels = 1
-            post_conv_size = 60032  # Example, adjust based on actual size
+            #post_conv_size = 60032  # Example, adjust based on actual size
             #post_conv_size = 165375 * 64
 
 
@@ -261,36 +261,27 @@ class AudioFeatureNet(nn.Module):
         self.conv_layers = nn.Sequential(
             nn.Conv1d(input_channels, 64, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm1d(64),
-            nn.ReLU(),
+            nn.Sigmoid(),
             nn.MaxPool1d(2),
             nn.Conv1d(64, 128, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm1d(128),
-            nn.ReLU(),
+            nn.Sigmoid(),
             nn.MaxPool1d(2),
             nn.Conv1d(128, 64, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm1d(64),
-            nn.ReLU(),
+            nn.Sigmoid(),
             nn.MaxPool1d(2)
         )
 
-        # Configure fully connected layers
-        self.fc_layers = nn.Sequential(
-            nn.Linear(post_conv_size, 128),
-            nn.ReLU(),
-            nn.Linear(128, 32)
-        )
-
     def forward(self, x):
-        print("Initial shape:", x.shape)
-        x = self.conv_layers[0:3](x)  # Up to first pooling
-        if x.shape[-1] > 2:
-            x = self.conv_layers[3:6](x)  # Next conv and pooling
-        if x.shape[-1] > 2:
-            x = self.conv_layers[6:](x)  # Final layers
-        print("Post-conv shape:", x.shape)
+        x = self.conv_layers(x)
+        num_features = x.size(1) * x.size(2)
+        fc_layers = nn.Sequential(
+            nn.Linear(num_features, 128),
+            nn.Sigmoid(),
+            nn.Linear(128, 32))
         x = x.view(x.size(0), -1)
-        print("Flattened shape:", x.shape)
-        x = self.fc_layers(x)
+        x = fc_layers(x)
         return x
 
 def segment_and_extract_features(audio_path, segment_length_sec, sample_rate_audio, feature_extractor, batch_size=256):
@@ -339,8 +330,8 @@ class DCCALoss(torch.nn.Module):
         self.outdim_size = outdim_size
 
     def forward(self, H1, H2):
-        r1 = 1e-4
-        r2 = 1e-4
+        r1 = 1e-6
+        r2 = 1e-6
         eps = 1e-9
 
         H1, H2 = H1.t(), H2.t()
@@ -452,11 +443,13 @@ def evaluate_model(configurations, condition, band, feature_name, subjects):
 
     output_base_path = configurations['output_paths']['evaluation']
     os.makedirs(output_base_path, exist_ok=True)
+    eeg_model_path = os.path.join(configurations['output_paths']['eeg'], f"{condition}_{band}_{feature_name}_eeg_net.pth")
+    audio_model_path = os.path.join(configurations['output_paths']['audio'], f"{condition}_{band}_{feature_name}_audio_net.pth")
     # Load the models
     eeg_net = EEGNet(transform_type=condition)
     audio_net = AudioFeatureNet(feature_type=feature_name)  # ensure this aligns with your updated class definition
-    eeg_net.load_state_dict(torch.load(configurations['output_paths']['eeg']))
-    audio_net.load_state_dict(torch.load(configurations['output_paths']['audio']))
+    eeg_net.load_state_dict(torch.load(eeg_model_path))
+    audio_net.load_state_dict(torch.load(audio_model_path))
     eeg_net.eval()
     audio_net.eval()
 
@@ -471,8 +464,12 @@ def evaluate_model(configurations, condition, band, feature_name, subjects):
         # Accumulate and average features over all batches
         all_eeg_features, all_audio_features = [], []
         for eeg_batch, audio_batch in zip(eeg_batches, audio_batches):
-            all_eeg_features.append(eeg_net(eeg_batch))
-            all_audio_features.append(audio_net(audio_batch))
+            eeg_features = eeg_net(eeg_batch)
+            check_tensor(eeg_features)
+            audio_features = audio_net(audio_batch)
+            check_tensor(audio_features)
+            all_eeg_features.append(eeg_features)
+            all_audio_features.append(audio_features)
         mean_eeg_features = torch.cat(all_eeg_features).mean(dim=0)
         mean_audio_features = torch.cat(all_audio_features).mean(dim=0)
 
@@ -508,6 +505,9 @@ def ensure_directories_exist(configurations):
     for path in configurations['output_paths'].values():
         os.makedirs(path, exist_ok=True)
 
+def check_tensor(tensor):
+    if torch.isnan(tensor).any():
+        raise ValueError("Tensor contains NaN values")
 
 def run_full_analysis(configurations):
     # Set random seed for reproducibility, manage subject lists, etc.
