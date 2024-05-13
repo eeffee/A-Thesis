@@ -546,9 +546,7 @@ def run_full_analysis(configurations):
                 train_model(eeg_net, audio_net, loss_fn, optimizer, train_subjects, valid_subjects, test_subjects, feature_extractor, condition, band, feature_name, audio_path, 256, 1)
 
                 # Save models
-                torch.save(eeg_net.state_dict(), configurations['output_paths']['eeg'])
-                torch.save(audio_net.state_dict(), configurations['output_paths']['audio'])
-                print("Models saved successfully for", condition, band, feature_name)
+                save_model_parameters(eeg_net,audio_net,condition,band,feature_name,configurations)
 
                 # Evaluate on specific subjects
                 evaluate_model(configurations, condition, band, feature_name, subjects_to_evaluate)
