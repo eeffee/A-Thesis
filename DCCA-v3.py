@@ -16,12 +16,12 @@ configurations = {
     'eeg_conditions': ['raw', 'phase'],
     'frequency_bands': ['theta', 'gamma', 'delta', 'beta', 'speech'],
     'audio_features': {
+        'PhaseOfEnvelope': PhaseOfEnvelope,
         'Mel': MelSpectrum,
         'Phase': PhaseSpectrum,
         'MFCC': MFCCSpectrum,
         'DeltaDeltaMFCC': DeltaDeltaMFCC,
-        'Envelope': SpeechEnvelope,
-        'PhaseOfEnvelope': PhaseOfEnvelope
+        'Envelope': SpeechEnvelope
     },
     'output_paths': {
         'model': '/home/oztufan/resultsDCCA/models/',
@@ -408,7 +408,7 @@ class AudioFeatureNet2D(nn.Module):
             raise ValueError(f"Unsupported feature type: {feature_type}")
 
         # Separate handling for the Envelope feature type
-        if feature_type == 'Envelope':
+        if feature_type == 'Envelope' or feature_type == 'PhaseOfEnvelope':
             self.conv_layers = nn.Sequential(
                 nn.Conv2d(input_channels, 32, kernel_size=(1, 1)),  # Use kernel size (1, 1) to avoid dimension issues
                 nn.BatchNorm2d(32),
