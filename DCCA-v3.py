@@ -408,21 +408,19 @@ class AudioFeatureNet2D(nn.Module):
             raise ValueError(f"Unsupported feature type: {feature_type}")
 
         # Adjust pooling parameters
-        pool_kernel_size = (2, 2)
-        pool_stride = (1, 1)
         self.conv_layers = nn.Sequential(
-            nn.Conv2d(input_channels, 32, kernel_size=(3, 3), padding=1),
+            nn.Conv2d(input_channels, 32, kernel_size=(1, 3), padding=(0, 1)),  # Use kernel size (1, 3)
             nn.BatchNorm2d(32),
             nn.ReLU(),
-            nn.MaxPool2d(kernel_size=pool_kernel_size, stride=pool_stride),  # Adjusted MaxPool2d
-            nn.Conv2d(32, 64, kernel_size=(3, 3), padding=1),
+            nn.MaxPool2d(kernel_size=(1, 2), stride=(1, 2), padding=(0, 0)),  # Adjust pooling parameters
+            nn.Conv2d(32, 64, kernel_size=(1, 3), padding=(0, 1)),  # Use kernel size (1, 3)
             nn.BatchNorm2d(64),
             nn.ReLU(),
-            nn.MaxPool2d(kernel_size=pool_kernel_size, stride=pool_stride),  # Adjusted MaxPool2d
-            nn.Conv2d(64, 128, kernel_size=(3, 3), padding=1),
+            nn.MaxPool2d(kernel_size=(1, 2), stride=(1, 2), padding=(0, 0)),  # Adjust pooling parameters
+            nn.Conv2d(64, 128, kernel_size=(1, 3), padding=(0, 1)),  # Use kernel size (1, 3)
             nn.BatchNorm2d(128),
             nn.ReLU(),
-            nn.MaxPool2d(kernel_size=pool_kernel_size, stride=pool_stride)  # Adjusted MaxPool2d
+            nn.MaxPool2d(kernel_size=(1, 2), stride=(1, 2), padding=(0, 0))  # Adjust pooling parameters
         )
         self._initialize_weights()
 
@@ -430,8 +428,7 @@ class AudioFeatureNet2D(nn.Module):
         height = input_height
         width = input_width
         for _ in range(3):  # Three max pooling layers
-            height = (height - pool_kernel_size[0]) // pool_stride[0] + 1
-            width = (width - pool_kernel_size[1]) // pool_stride[1] + 1
+            width = (width - 2) // 2 + 1  # Updated formula to reflect new pooling parameters
         output_size = 128 * height * width
 
         self.fc_layers = nn.Sequential(
@@ -690,7 +687,7 @@ def evaluate_model(configurations, condition, band, feature_name, subjects):
                                             f"{condition}_{band}_{feature_name}_{subject_id}_correlation.npy")
         summary_output_path = os.path.join(output_base_path,
                                            f"{condition}_{band}_{feature_name}_{subject_id}_average_correlation.txt")
-        np.save(detailed_output_path, correlations.numpy())
+        np.save(detailed_output_path, correlations.detach().numpy())
         with open(summary_output_path, 'w') as f:
             f.write(f"Average Correlation: {average_correlation}\nDiagonal Average: {avg_diagonal}\n")
 
