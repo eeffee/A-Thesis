@@ -394,7 +394,7 @@ class AudioFeatureNet2D(nn.Module):
             input_height, input_width = 40, 59
         elif feature_type == 'Phase':
             input_channels = 1
-            input_height, input_width = 40, 59
+            input_height, input_width = 257, 59
         elif feature_type in ['MFCC', 'DeltaDeltaMFCC']:
             input_channels = 1
             input_height, input_width = 13, 8
