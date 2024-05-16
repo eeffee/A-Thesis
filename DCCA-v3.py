@@ -410,20 +410,17 @@ class AudioFeatureNet2D(nn.Module):
         # Separate handling for the Envelope feature type
         if feature_type == 'Envelope':
             self.conv_layers = nn.Sequential(
-                nn.Conv2d(input_channels, 32, kernel_size=(1, 2), padding=(0, 0)),  # Reduce kernel size to avoid dimension reduction to zero
+                nn.Conv2d(input_channels, 32, kernel_size=(1, 1)),  # Use kernel size (1, 1) to avoid dimension issues
                 nn.BatchNorm2d(32),
                 nn.ReLU(),
-                nn.MaxPool2d((1, 1)),  # Pooling with kernel size (1, 1) to avoid reduction
-                nn.Conv2d(32, 64, kernel_size=(1, 2), padding=(0, 0)),
+                nn.Conv2d(32, 64, kernel_size=(1, 1)),  # Use kernel size (1, 1)
                 nn.BatchNorm2d(64),
                 nn.ReLU(),
-                nn.MaxPool2d((1, 1)),
-                nn.Conv2d(64, 128, kernel_size=(1, 2), padding=(0, 0)),
+                nn.Conv2d(64, 128, kernel_size=(1, 1)),  # Use kernel size (1, 1)
                 nn.BatchNorm2d(128),
-                nn.ReLU(),
-                nn.MaxPool2d((1, 1))
+                nn.ReLU()
             )
-            height = input_height  # No change in height dimension for kernel_size=(1, 2)
+            height = input_height  # No change in height dimension for kernel_size=(1, 1)
             width = input_width
         else:
             self.conv_layers = nn.Sequential(
