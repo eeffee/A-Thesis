@@ -394,7 +394,7 @@ class AudioFeatureNet2D(nn.Module):
             input_height, input_width = 40, 59
         elif feature_type == 'Phase':
             input_channels = 1
-            input_height, input_width = 257, 59
+            input_height, input_width = 40, 59
         elif feature_type in ['MFCC', 'DeltaDeltaMFCC']:
             input_channels = 1
             input_height, input_width = 13, 8
@@ -407,28 +407,43 @@ class AudioFeatureNet2D(nn.Module):
         else:
             raise ValueError(f"Unsupported feature type: {feature_type}")
 
-        # Adjust pooling parameters
-        self.conv_layers = nn.Sequential(
-            nn.Conv2d(input_channels, 32, kernel_size=(1, 3), padding=(0, 1)),  # Use kernel size (1, 3)
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=(1, 2), stride=(1, 2), padding=(0, 0)),  # Adjust pooling parameters
-            nn.Conv2d(32, 64, kernel_size=(1, 3), padding=(0, 1)),  # Use kernel size (1, 3)
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=(1, 2), stride=(1, 2), padding=(0, 0)),  # Adjust pooling parameters
-            nn.Conv2d(64, 128, kernel_size=(1, 3), padding=(0, 1)),  # Use kernel size (1, 3)
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=(1, 2), stride=(1, 2), padding=(0, 0))  # Adjust pooling parameters
-        )
-        self._initialize_weights()
+        # Separate handling for the Envelope feature type
+        if feature_type == 'Envelope':
+            self.conv_layers = nn.Sequential(
+                nn.Conv2d(input_channels, 32, kernel_size=(1, 2), padding=(0, 0)),  # Reduce kernel size to avoid dimension reduction to zero
+                nn.BatchNorm2d(32),
+                nn.ReLU(),
+                nn.MaxPool2d((1, 1)),  # Pooling with kernel size (1, 1) to avoid reduction
+                nn.Conv2d(32, 64, kernel_size=(1, 2), padding=(0, 0)),
+                nn.BatchNorm2d(64),
+                nn.ReLU(),
+                nn.MaxPool2d((1, 1)),
+                nn.Conv2d(64, 128, kernel_size=(1, 2), padding=(0, 0)),
+                nn.BatchNorm2d(128),
+                nn.ReLU(),
+                nn.MaxPool2d((1, 1))
+            )
+            height = input_height  # No change in height dimension for kernel_size=(1, 2)
+            width = input_width
+        else:
+            self.conv_layers = nn.Sequential(
+                nn.Conv2d(input_channels, 32, kernel_size=(3, 3), padding=1),
+                nn.BatchNorm2d(32),
+                nn.ReLU(),
+                nn.MaxPool2d((2, 2)),
+                nn.Conv2d(32, 64, kernel_size=(3, 3), padding=1),
+                nn.BatchNorm2d(64),
+                nn.ReLU(),
+                nn.MaxPool2d((2, 2)),
+                nn.Conv2d(64, 128, kernel_size=(3, 3), padding=1),
+                nn.BatchNorm2d(128),
+                nn.ReLU(),
+                nn.MaxPool2d((2, 2))
+            )
+            # Calculate the size after convolutions and pooling
+            height = input_height // 8  # Three max pooling layers with pool size (2, 2)
+            width = input_width // 8
 
-        # Calculate the size after convolutions and pooling
-        height = input_height
-        width = input_width
-        for _ in range(3):  # Three max pooling layers
-            width = (width - 2) // 2 + 1  # Updated formula to reflect new pooling parameters
         output_size = 128 * height * width
 
         self.fc_layers = nn.Sequential(
@@ -463,6 +478,7 @@ class AudioFeatureNet2D(nn.Module):
             raise ValueError("NaN values found after fc_layers in AudioFeatureNet2D")
 
         return x
+
 
 
 
