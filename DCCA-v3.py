@@ -56,23 +56,22 @@ def extract_phase(data):
     return phase_data
 
 def compute_correlation_matrix(u, v):
-
-    # Mean centering
     u_mean = torch.mean(u, dim=0)
     v_mean = torch.mean(v, dim=0)
-    u = u - u_mean
-    v = v - v_mean
+    u_centered = u - u_mean  # Out-of-place operation
+    v_centered = v - v_mean  # Out-of-place operation
 
     # Compute covariance matrices
     N = u.size(0)
-    sigma_uu = (u.T @ u) / (N - 1)
-    sigma_vv = (v.T @ v) / (N - 1)
-    sigma_uv = (u.T @ v) / (N - 1)
+    sigma_uu = torch.matmul(u_centered.T, u_centered) / (N - 1)
+    sigma_vv = torch.matmul(v_centered.T, v_centered) / (N - 1)
+    sigma_uv = torch.matmul(u_centered.T, v_centered) / (N - 1)
 
-    # Calculate the correlation matrix
-    inv_sqrt_sigma_uu = torch.linalg.inv(torch.sqrt(sigma_uu))
-    inv_sqrt_sigma_vv = torch.linalg.inv(torch.sqrt(sigma_vv))
-    correlation_matrix = inv_sqrt_sigma_uu @ sigma_uv @ inv_sqrt_sigma_vv
+
+    # Compute the matrix product
+    inv_sigma_uu = torch.linalg.inv(sigma_uu)
+    inv_sigma_vv = torch.linalg.inv(sigma_vv)
+    correlation_matrix = torch.matmul(inv_sigma_uu, torch.matmul(sigma_uv, torch.matmul(inv_sigma_vv, sigma_uv.T)))
 
     return correlation_matrix
 
