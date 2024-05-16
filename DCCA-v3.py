@@ -394,7 +394,7 @@ class AudioFeatureNet2D(nn.Module):
             input_height, input_width = 40, 59
         elif feature_type == 'Phase':
             input_channels = 1
-            input_height, input_width = 40, 59
+            input_height, input_width = 257, 59
         elif feature_type in ['MFCC', 'DeltaDeltaMFCC']:
             input_channels = 1
             input_height, input_width = 13, 8
@@ -407,25 +407,31 @@ class AudioFeatureNet2D(nn.Module):
         else:
             raise ValueError(f"Unsupported feature type: {feature_type}")
 
+        # Adjust pooling parameters
+        pool_kernel_size = (2, 2)
+        pool_stride = (1, 1)
         self.conv_layers = nn.Sequential(
             nn.Conv2d(input_channels, 32, kernel_size=(3, 3), padding=1),
             nn.BatchNorm2d(32),
             nn.ReLU(),
-            nn.MaxPool2d((2, 2)),
+            nn.MaxPool2d(kernel_size=pool_kernel_size, stride=pool_stride),  # Adjusted MaxPool2d
             nn.Conv2d(32, 64, kernel_size=(3, 3), padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(),
-            nn.MaxPool2d((2, 2)),
+            nn.MaxPool2d(kernel_size=pool_kernel_size, stride=pool_stride),  # Adjusted MaxPool2d
             nn.Conv2d(64, 128, kernel_size=(3, 3), padding=1),
             nn.BatchNorm2d(128),
             nn.ReLU(),
-            nn.MaxPool2d((2, 2))
+            nn.MaxPool2d(kernel_size=pool_kernel_size, stride=pool_stride)  # Adjusted MaxPool2d
         )
         self._initialize_weights()
 
         # Calculate the size after convolutions and pooling
-        height = input_height // 8  # Three max pooling layers with pool size (2, 2)
-        width = input_width // 8
+        height = input_height
+        width = input_width
+        for _ in range(3):  # Three max pooling layers
+            height = (height - pool_kernel_size[0]) // pool_stride[0] + 1
+            width = (width - pool_kernel_size[1]) // pool_stride[1] + 1
         output_size = 128 * height * width
 
         self.fc_layers = nn.Sequential(
@@ -644,7 +650,7 @@ def evaluate_model(configurations, condition, band, feature_name, subjects):
                                     f"{condition}_{band}_{feature_name}_audio_net.pth")
 
     # Load the models
-    eeg_net = EEGNet2D(input_height=1, input_channels=17, input_width=7500, transform_type=condition)
+    eeg_net = EEGNet2D(input_channels=1, input_height=17, input_width=7500, transform_type=condition)
     audio_net = AudioFeatureNet2D(feature_type=feature_name)  # Ensure this aligns with your updated class definition
     eeg_net.load_state_dict(torch.load(eeg_model_path))
     audio_net.load_state_dict(torch.load(audio_model_path))
