@@ -677,8 +677,8 @@ def evaluate_model(configurations, condition, band, feature_name, subjects):
             all_eeg_features.append(eeg_features)
             all_audio_features.append(audio_features)
 
-        mean_eeg_features = torch.cat(all_eeg_features).mean(dim=0)
-        mean_audio_features = torch.cat(all_audio_features).mean(dim=0)
+        mean_eeg_features = torch.cat(all_eeg_features)
+        mean_audio_features = torch.cat(all_audio_features)
 
         # Compute correlation matrix
         correlations = compute_correlation_matrix(mean_eeg_features, mean_audio_features)
