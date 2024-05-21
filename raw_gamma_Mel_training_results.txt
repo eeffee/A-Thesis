@@ -1,0 +1,14 @@
+Epoch 1: Training Loss = -23.342477902122166, Validation Loss = -120.03370666503906
+Final Test Loss = 1301.1931457519531
+Epoch 2: Training Loss = 865.6350674836532, Validation Loss = -521.8270624160766
+Final Test Loss = -255.47174072265625
+Epoch 3: Training Loss = 10260.324698572573, Validation Loss = -788.6195701599121
+Final Test Loss = -427.9775152206421
+Epoch 4: Training Loss = -909541.4616007598, Validation Loss = -42672.48486328125
+Final Test Loss = 287228.400390625
+Epoch 5: Training Loss = 1385.082543414572, Validation Loss = 4420.471417236328
+Final Test Loss = -5723.165771484375
+Epoch 6: Training Loss = 180.76235563858697, Validation Loss = -54.490589714050294
+Final Test Loss = -488.6568603515625
+Epoch 7: Training Loss = -1514.8786650947902, Validation Loss = -245.58135986328125
+Final Test Loss = -634.368013381958

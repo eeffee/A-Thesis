@@ -1,0 +1,2 @@
+Average Correlation: -0.05743098258972168
+Diagonal Average: -12.73428726196289
