@@ -74,7 +74,13 @@ def compute_correlation_matrix(u, v):
     sigma_uu = torch.matmul(u_centered.T, u_centered) / (N - 1)
     sigma_vv = torch.matmul(v_centered.T, v_centered) / (N - 1)
     sigma_uv = torch.matmul(u_centered.T, v_centered) / (N - 1)
-
+    # Regularize covariances by adding small identity matrices
+    d_u = sigma_uu.size(0)
+    d_v = sigma_vv.size(0)
+    identity_u = torch.eye(d_u, dtype=sigma_uu.dtype, device=sigma_uu.device)
+    identity_v = torch.eye(d_v, dtype=sigma_vv.dtype, device=sigma_vv.device)
+    sigma_uu = sigma_uu + 1e-3 * identity_u  # Out-of-place operation
+    sigma_vv = sigma_vv + 1e-3 * identity_v  # Out-of-place operation
 
     # Compute the matrix product
     inv_sigma_uu = torch.linalg.inv(sigma_uu)
