@@ -1,5 +1,4 @@
 import mne
-from dataPrep import Brennan2019Recording
 import torch
 from torch import nn, optim
 import numpy as np
@@ -9,35 +8,41 @@ import random
 from sklearn.decomposition import PCA
 from scipy.signal import resample, hilbert
 from scipy.io import wavfile
+import h5py
+import pandas as pd
 
 torch.autograd.set_detect_anomaly(True)
 
 configurations = {
-    'eeg_conditions': ['raw', 'phase'],
-    'frequency_bands': ['theta', 'gamma', 'delta', 'beta', 'speech'],
+    'eeg_conditions': ['phase', 'raw'],
+    'frequency_bands': ['gamma','theta', 'delta', 'beta', 'speech'],
     'audio_features': {
+
+        'Envelope': SpeechEnvelope,
+        'Phase': PhaseSpectrum,
+        'DeltaDeltaMFCC' : DeltaDeltaMFCC,
+        'MFCC': MFCCSpectrum,
         'PhaseOfEnvelope': PhaseOfEnvelope,
         'Mel': MelSpectrum,
-        'Phase': PhaseSpectrum,
-        'MFCC': MFCCSpectrum,
-        'DeltaDeltaMFCC': DeltaDeltaMFCC,
-        'Envelope': SpeechEnvelope
+
     },
     'output_paths': {
-        'model': '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDCCA/models/',
-        'training': '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDCCA/trainresults/',
-        'evaluation': '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDCCA/evalresults/',
-        'eeg' : '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDCCA/eeg/',
-        'audio' : '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDCCA/audio/'
+        'model': '/home/oztufan/resultsDCCA/models/',
+        'training': '/home/oztufan/resultsDCCA/trainresults/',
+        'evaluation': '/home/oztufan/resultsDCCA/evalresults/',
+        'eeg' : '/home/oztufan/resultsDCCA/eeg/',
+        'audio' : '/home/oztufan/resultsDCCA/audio/'
     },
-    'audio_path': '/Users/efeoztufan/Desktop/A-Thesis/Datasets/bg257f92t/audio/AllStory.wav',
+    'audio_path': '/home/oztufan/resultsDCCA/Ali/Audio/AllStories-250Hz.wav',
     'data_path': 'data/'
 }
 
 # Define constants and parameters
 SAMPLE_RATE_AUDIO = 44100  # Audio sample rate
 SAMPLE_RATE_EEG = 500  # EEG sample rate
-SEGMENT_LENGTH_SEC = 30  # Length of each audio and EEG segment in seconds
+SEGMENT_LENGTH_SEC = 10  # Length of each audio and EEG segment in seconds
+
+
 
 def bandpass_filter(data, sfreq, l_freq, h_freq):
     # Create a filter for the band range [l_freq, h_freq]
@@ -75,7 +80,7 @@ def compute_correlation_matrix(u, v):
 
     return correlation_matrix
 
-def apply_pca_to_eeg_data(eeg_data, n_components=17):
+def apply_pca_to_eeg_data(eeg_data, n_components=10):
     # Assuming original eeg_data shape is (channels, samples)
     pca = PCA(n_components=n_components)
     reshaped_data = eeg_data.T  # Shape becomes (samples, channels)
@@ -87,122 +92,24 @@ def apply_pca_to_eeg_data(eeg_data, n_components=17):
         raise ValueError("PCA transformed data contains NaN values")
     return transformed_data
 
-class EEGNet(nn.Module):
-    def __init__(self, input_channels=17, transform_type=None): # After PCA, 17 channels obtained.
-        super(EEGNet, self).__init__()
-        self.conv_layers = nn.Sequential(
-            nn.Conv1d(input_channels, 128, kernel_size=3, padding=1),  # Convolution over time for each channel
-            nn.BatchNorm1d(128),  # Batch normalization
-            nn.LogSigmoid(),
-            nn.MaxPool1d(2),  # Reduce dimensionality
-            nn.Conv1d(128, 128, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm1d(128),
-            nn.LogSigmoid(),
-            nn.MaxPool1d(2),  # Further reduction by factor of 2
-            nn.Conv1d(128, 64, kernel_size=3, padding=1),
-            nn.BatchNorm1d(64),
-            nn.LogSigmoid(),
-            nn.MaxPool1d(2)
-        )
-        self._initialize_weights()  # Initialize weights
-
-
-        # Calculate size after convolutions
-        # After each MaxPool1d, the length is halved
-        # Initial length: 15000
-        # After first pool: 7500
-        # After second pool: 3750
-        # Calculate output size based on transform_type
-        if transform_type == 'raw':
-            output_size = 64 * 937  # The final sequence length after pooling is 937
-        elif transform_type == 'phase':
-            output_size = 64 * 937 # Adjust this based on the actual length post-transformations for phase
-        self.fc_layers = nn.Sequential(
-            nn.Linear(output_size, 128),
-            nn.LogSigmoid(),
-            nn.Linear(128, 32)
-        )
-    def _initialize_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv1d) or isinstance(m, nn.Linear):
-                nn.init.xavier_normal_(m.weight)  # Xavier initialization
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.BatchNorm1d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-
-    def forward(self, x):
-        if x.dim() == 4 and x.shape[1] == 1:
-            x = x.squeeze(1)
-        x = torch.clamp(x, min=-1e6, max=1e6)  # Clamp input values
-        if torch.isnan(x).any():
-            raise ValueError("Input to EEGNet contains NaN values")
-
-        x = self.conv_layers[0](x)
-        if torch.isnan(x).any():
-            raise ValueError("NaN values found after first conv layer in EEGNet")
-        x = self.conv_layers[1](x)
-        if torch.isnan(x).any():
-            raise ValueError("NaN values found after first batch norm in EEGNet")
-        x = self.conv_layers[2](x)
-        if torch.isnan(x).any():
-            raise ValueError("NaN values found after first activation in EEGNet")
-        x = self.conv_layers[3](x)
-        if torch.isnan(x).any():
-            raise ValueError("NaN values found after first pooling in EEGNet")
-
-        x = self.conv_layers[4](x)
-        if torch.isnan(x).any():
-            raise ValueError("NaN values found after second conv layer in EEGNet")
-        x = self.conv_layers[5](x)
-        if torch.isnan(x).any():
-            raise ValueError("NaN values found after second batch norm in EEGNet")
-        x = self.conv_layers[6](x)
-        if torch.isnan(x).any():
-            raise ValueError("NaN values found after second activation in EEGNet")
-        x = self.conv_layers[7](x)
-        if torch.isnan(x).any():
-            raise ValueError("NaN values found after second pooling in EEGNet")
-
-        x = self.conv_layers[8](x)
-        if torch.isnan(x).any():
-            raise ValueError("NaN values found after third conv layer in EEGNet")
-        x = self.conv_layers[9](x)
-        if torch.isnan(x).any():
-            raise ValueError("NaN values found after third batch norm in EEGNet")
-        x = self.conv_layers[10](x)
-        if torch.isnan(x).any():
-            raise ValueError("NaN values found after third activation in EEGNet")
-        x = self.conv_layers[11](x)
-        if torch.isnan(x).any():
-            raise ValueError("NaN values found after third pooling in EEGNet")
-
-        x = x.view(x.size(0), -1)
-        x = self.fc_layers(x)
-        if torch.isnan(x).any():
-            raise ValueError("NaN values found after fc_layers in EEGNet")
-
-        return x
-
 
 class EEGNet2D(nn.Module):
-    def __init__(self, input_channels=1, input_height=17, input_width=7500, transform_type=None):
+    def __init__(self, input_channels=1, input_height=10, input_width=640, transform_type=None):
         super(EEGNet2D, self).__init__()
         self.transform_type = transform_type
 
         self.conv_layers = nn.Sequential(
             nn.Conv2d(input_channels, 32, kernel_size=(1, 3), padding=(0, 1)),
             nn.BatchNorm2d(32),
-            nn.LogSigmoid(),
+            nn.Sigmoid(),
             nn.MaxPool2d(kernel_size=(1, 2), stride=(1, 2)),  # Ensure stride <= kernel_size
             nn.Conv2d(32, 64, kernel_size=(1, 3), padding=(0, 1)),
             nn.BatchNorm2d(64),
-            nn.LogSigmoid(),
+            nn.Sigmoid(),
             nn.MaxPool2d(kernel_size=(1, 2), stride=(1, 2)),  # Ensure stride <= kernel_size
             nn.Conv2d(64, 128, kernel_size=(1, 3), padding=(0, 1)),
             nn.BatchNorm2d(128),
-            nn.LogSigmoid(),
+            nn.Sigmoid(),
             nn.MaxPool2d(kernel_size=(1, 2), stride=(1, 2))  # Ensure stride <= kernel_size
         )
         self._initialize_weights()
@@ -210,56 +117,53 @@ class EEGNet2D(nn.Module):
         height = input_height  # No change in height dimension for kernel_size=(1, 3)
         width = input_width // 8  # Three max pooling layers with pool size (1, 2)
         output_size = 128 * height * width
+        output_size = 102400
         self.fc_layers = nn.Sequential(
             nn.Linear(output_size, 128),
-            nn.LogSigmoid(),
+            nn.Sigmoid(),
             nn.Linear(128, 32)
         )
 
     def _initialize_weights(self):
         for m in self.modules():
-            if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
-                nn.init.xavier_normal_(m.weight)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, 0, 0.01)
 
     def forward(self, x):
-        if torch.isnan(x).any():
-            raise ValueError("Input to EEGNet2D contains NaN values")
-
-        # Continue with the rest of the layers...
         x = self.conv_layers(x)
-        if torch.isnan(x).any():
-            raise ValueError(f"NaN values found after conv layer in EEGNet2D")
-
-        x = x.view(x.size(0), -1)
+        x = x.view(x.size(0), -1)  # Flatten the output for the FC layer
         x = self.fc_layers(x)
-        if torch.isnan(x).any():
-            raise ValueError("NaN values found after fc_layers in EEGNet2D")
-
         return x
 
 
-def load_and_segment_eeg(subject_id, segment_length_sec, sample_rate_eeg, batch_size=256, frequency_band=None,
-                         transform_type=None):
+def load_and_segment_eeg(subject_id, segment_length_sec, sample_rate_eeg, batch_size=64, frequency_band=None,
+                         transform_type=None, data_dir = None):
     # Initialize and load data using some EEG data loader
-    recording = Brennan2019Recording(subject_uid=subject_id, recording_uid=None)
-    eeg_raw = recording._load_raw()  # Load EEG data
-    eeg_data = eeg_raw.get_data()
-    eeg_data = clamp_data(torch.tensor(eeg_data), name="Raw EEG Data")
+    # Define the path to the subject's .mat file
+    mat_file_path = os.path.join(data_dir, f"{subject_id}_EnDe.mat")
 
-    sample_rate_eeg = 250
-    if eeg_raw.info['sfreq'] != sample_rate_eeg:
+    # Initialize AliDataset with the path to the .mat file
+    ali_dataset = AliDataset(mat_file_path)
+
+    # Load and get the dataframes
+    dataframes = ali_dataset.load_data()
+
+    # Assuming 'data' key contains the EEG data
+    eeg_data = dataframes['data'].values.T  # Convert DataFrame to numpy array and transpose to shape (channels, samples)
+    goal_rate_eeg = 64
+    # Resample the EEG data if necessary
+    if sample_rate_eeg != goal_rate_eeg:
         num_samples = eeg_data.shape[1]
-        new_num_samples = int(num_samples * sample_rate_eeg / eeg_raw.info['sfreq'])
+        new_num_samples = int(num_samples * goal_rate_eeg / sample_rate_eeg)
         eeg_data = resample(eeg_data, new_num_samples, axis=1)
+        sample_rate_eeg = goal_rate_eeg
 
+    eeg_data = eeg_data.astype(np.float64)
     # Frequency bands
     freq_bands = {
-        'gamma': (30, 100),
+        'gamma': (30, 60),
         'beta': (13, 30),
         'speech': (1, 10),
         'delta': (1, 4),
@@ -272,7 +176,7 @@ def load_and_segment_eeg(subject_id, segment_length_sec, sample_rate_eeg, batch_
     # Filter EEG data if a frequency band is specified
     if frequency_band in freq_bands:
         l_freq, h_freq = freq_bands[frequency_band]
-        eeg_data = bandpass_filter(eeg_data, eeg_raw.info['sfreq'], l_freq, h_freq)
+        eeg_data = bandpass_filter(eeg_data, sample_rate_eeg, l_freq, h_freq)
 
     # Extract phase if requested
     if transform_type == 'phase':
@@ -284,7 +188,7 @@ def load_and_segment_eeg(subject_id, segment_length_sec, sample_rate_eeg, batch_
     # Apply PCA
     eeg_data = apply_pca_to_eeg_data(eeg_data)
 
-    eeg_data = clamp_data(torch.tensor(eeg_data), name="EEG Data Last")
+    #eeg_data = clamp_data(torch.tensor(eeg_data), name="EEG Data Last")
 
     # Process and batch data
     def process_data(data, segment_length_sec, sample_rate_eeg, batch_size):
@@ -320,67 +224,7 @@ def load_and_segment_eeg(subject_id, segment_length_sec, sample_rate_eeg, batch_
     }
 
 
-class AudioFeatureNet(nn.Module):
-    def __init__(self, feature_type):
-        super(AudioFeatureNet, self).__init__()
-        self.feature_type = feature_type
 
-        # Define convolutional layer sizes based on feature type
-        if feature_type == 'Mel':
-            input_channels = 40  # Example, adjust as necessary
-        elif feature_type == 'Phase':
-            input_channels = 257
-        elif feature_type in ['MFCC', 'DeltaDeltaMFCC']:
-            input_channels = 13
-        elif feature_type == 'Envelope':
-            input_channels = 1
-        elif feature_type == 'PhaseOfEnvelope':
-            input_channels = 1
-
-            # Configure convolutional layers
-        self.conv_layers = nn.Sequential(
-            nn.Conv1d(input_channels, 64, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm1d(64),
-            nn.Sigmoid(),
-            nn.MaxPool1d(2),
-            nn.Conv1d(64, 128, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm1d(128),
-            nn.Sigmoid(),
-            nn.MaxPool1d(2),
-            nn.Conv1d(128, 64, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm1d(64),
-            nn.Sigmoid(),
-            nn.MaxPool1d(2)
-        )
-        self._initialize_weights()  # Initialize weights
-
-    def _initialize_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv1d) or isinstance(m, nn.Linear):
-                nn.init.xavier_normal_(m.weight)  # Xavier initialization
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.BatchNorm1d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-
-    def forward(self, x):
-        if torch.isnan(x).any():
-            raise ValueError("Input to AudioFeatureNet contains NaN values")
-        x = self.conv_layers(x)
-        if torch.isnan(x).any():
-            raise ValueError("NaN values found after conv_layers in AudioFeatureNet")
-
-        num_features = x.size(1) * x.size(2)
-        fc_layers = nn.Sequential(
-            nn.Linear(num_features, 128),
-            nn.Sigmoid(),
-            nn.Linear(128, 32))
-        x = x.view(x.size(0), -1)
-        x = fc_layers(x)
-        if torch.isnan(x).any():
-            raise ValueError("NaN values found after fc_layers in AudioFeatureNet")
-        return x
 
 
 class AudioFeatureNet2D(nn.Module):
@@ -391,19 +235,22 @@ class AudioFeatureNet2D(nn.Module):
         # Define convolutional layer sizes based on feature type
         if feature_type == 'Mel':
             input_channels = 1
-            input_height, input_width = 40, 59
+            input_height, input_width = 40, 6
+            pool_height, pool_width = 2, 2
         elif feature_type == 'Phase':
             input_channels = 1
-            input_height, input_width = 257, 59
+            input_height, input_width = 257, 6
+            pool_height, pool_width = 2, 2
         elif feature_type in ['MFCC', 'DeltaDeltaMFCC']:
             input_channels = 1
-            input_height, input_width = 13, 8
+            input_height, input_width = 13, 3
+            pool_height, pool_width = 2, 1
         elif feature_type == 'Envelope':
             input_channels = 1
             input_height, input_width = 1, 3
         elif feature_type == 'PhaseOfEnvelope':
             input_channels = 1
-            input_height, input_width = 1, 7500
+            input_height, input_width = 1, 640
         else:
             raise ValueError(f"Unsupported feature type: {feature_type}")
 
@@ -427,19 +274,19 @@ class AudioFeatureNet2D(nn.Module):
                 nn.Conv2d(input_channels, 32, kernel_size=(3, 3), padding=1),
                 nn.BatchNorm2d(32),
                 nn.ReLU(),
-                nn.MaxPool2d((2, 2)),
+                nn.MaxPool2d((pool_height, pool_width)),
                 nn.Conv2d(32, 64, kernel_size=(3, 3), padding=1),
                 nn.BatchNorm2d(64),
                 nn.ReLU(),
-                nn.MaxPool2d((2, 2)),
+                nn.MaxPool2d((pool_height, 1)),
                 nn.Conv2d(64, 128, kernel_size=(3, 3), padding=1),
                 nn.BatchNorm2d(128),
                 nn.ReLU(),
-                nn.MaxPool2d((2, 2))
+                nn.MaxPool2d((pool_height, 1))
             )
             # Calculate the size after convolutions and pooling
-            height = input_height // 8  # Three max pooling layers with pool size (2, 2)
-            width = input_width // 8
+            height = input_height // (pool_height ** 3) # Height reduced three times
+            width = input_width // (pool_width * 1 * 1) # Width reduced only once
 
         output_size = 128 * height * width
 
@@ -479,12 +326,14 @@ class AudioFeatureNet2D(nn.Module):
 
 
 
-def segment_and_extract_features(audio_path, segment_length_sec, sample_rate_audio, feature_extractor, batch_size=256):
+def segment_and_extract_features(audio_path, segment_length_sec, sample_rate_audio, feature_extractor, batch_size=64):
     # Load audio data
     sr, audio = wavfile.read(audio_path)
-    sample_rate_audio = 250  # Set your desired sample rate
-    if sr != sample_rate_audio:
-        audio = resample(audio, int(len(audio) * sample_rate_audio / sr))
+    sample_rate_audio = sr
+    goal_sample_rate = 64  # Set your desired sample rate
+    if goal_sample_rate != sample_rate_audio:
+        audio = resample(audio, int(len(audio) * goal_sample_rate / sample_rate_audio))
+        sample_rate_audio = goal_sample_rate
 
     samples_per_segment = int(segment_length_sec * sample_rate_audio)
     segments = [audio[i:i + samples_per_segment] for i in range(0, len(audio), samples_per_segment)]
@@ -528,37 +377,85 @@ class DCCALoss(nn.Module):
         d_v = sigma_vv.size(0)
         identity_u = torch.eye(d_u, dtype=sigma_uu.dtype, device=sigma_uu.device)
         identity_v = torch.eye(d_v, dtype=sigma_vv.dtype, device=sigma_vv.device)
-        sigma_uu = sigma_uu + 1e-4 * identity_u  # Out-of-place operation
-        sigma_vv = sigma_vv + 1e-4 * identity_v  # Out-of-place operation
-
+        sigma_uu = sigma_uu + 1e-3 * identity_u  # Out-of-place operation
+        sigma_vv = sigma_vv + 1e-3 * identity_v  # Out-of-place operation
+        cond_u = torch.linalg.cond(sigma_uu)
+        cond_v = torch.linalg.cond(sigma_vv)
+        if cond_u > 1e10 or cond_v > 1e10:
+            print("high condition values are detected. Increase reg!")
         # Compute the matrix product
         inv_sigma_uu = torch.linalg.inv(sigma_uu)
         inv_sigma_vv = torch.linalg.inv(sigma_vv)
-        T = torch.matmul(inv_sigma_uu, torch.matmul(sigma_uv, torch.matmul(inv_sigma_vv, sigma_uv.T)))
+        T = torch.matmul(inv_sigma_uu, torch.matmul(sigma_uv, inv_sigma_vv))
 
-        # Loss is the negative sum of diagonal elements of T
-        loss = -torch.trace(T)
+        # Loss is the negative trace  of that. which represnts the sum of cannonical correlataions
+        loss = -torch.trace(torch.matmul(T,T.T))
         return loss
 
+class AliDataset:
+    def __init__(self, mat_file_path, eeg_key='data_eeg'):
+        self.mat_file_path = mat_file_path
+        self.eeg_key = eeg_key
+        self.dataframes = {}
+
+    def explore_group(self, group, path=''):
+        datasets = {}
+        for key in group.keys():
+            item = group[key]
+            full_path = f"{path}/{key}" if path else key
+            if isinstance(item, h5py.Dataset):
+                datasets[full_path] = item[()]
+            elif isinstance(item, h5py.Group):
+                datasets.update(self.explore_group(item, full_path))
+            else:
+                print(f"Unknown type for key: {full_path}")
+        return datasets
+
+    def load_data(self):
+        with h5py.File(self.mat_file_path, 'r') as f:
+            if self.eeg_key in f:
+                eeg_group = f[self.eeg_key]
+                datasets = self.explore_group(eeg_group)
+
+                for key, data in datasets.items():
+                    if data.ndim == 3:  # Handle 3D arrays
+                        reshaped_data = data.reshape(-1, data.shape[-1])
+                    else:
+                        reshaped_data = data
+                    df = pd.DataFrame(reshaped_data)
+                    df.columns = [f'Channel_{i + 1}' for i in range(df.shape[1])]
+                    self.dataframes[key] = df
+
+                return self.dataframes
+            else:
+                print(f"The key '{self.eeg_key}' does not exist in the .mat file. Please check the file contents.")
+                return None
+
+    def get_dataframes(self):
+        return self.dataframes
 
 
 def run_phase(subjects, audio_path, feature_extractor, eeg_net, audio_net, optimizer, loss_fn, phase, batch_size,
-              frequency_band, eeg_condition):
+              frequency_band, eeg_condition,eeg_path):
     total_loss = 0.0
     num_batches = 0
 
     for subject_id in subjects:
         print(subject_id)
         eeg_batches = load_and_segment_eeg(subject_id, SEGMENT_LENGTH_SEC, SAMPLE_RATE_EEG, batch_size, frequency_band,
-                                           eeg_condition)['segments']
+                                           eeg_condition, eeg_path)['segments']
         audio_batches = segment_and_extract_features(audio_path, SEGMENT_LENGTH_SEC, SAMPLE_RATE_AUDIO,
                                                      feature_extractor, batch_size)
+        # Remove last element becuase tensors have different batch sizes
+        audio_batches = audio_batches[:-1]
+        eeg_batches = eeg_batches[:-1]
 
         for eeg_batch, audio_batch in zip(eeg_batches, audio_batches):
             # Example usage before model forward pass
             check_data(eeg_batch, "EEG Batch")
             eeg_batch = (eeg_batch - eeg_batch.mean(dim=0, keepdim=True)) / eeg_batch.std(dim=0, keepdim=True)
             check_data(audio_batch, "Audio Batch")
+            audio_batch = (audio_batch - audio_batch.mean(dim=0, keepdim=True)) / audio_batch.std(dim=0, keepdim =True)
 
             if phase == 'train' and optimizer:
                 optimizer.zero_grad()
@@ -572,8 +469,8 @@ def run_phase(subjects, audio_path, feature_extractor, eeg_net, audio_net, optim
                 raise ValueError("Loss contains NaN values")
             if phase == 'train' and optimizer:
                 loss.backward()
-                #nn.utils.clip_grad_norm_(eeg_net.parameters(), max_norm=1.0)
-                #nn.utils.clip_grad_norm_(audio_net.parameters(), max_norm=1.0)
+                nn.utils.clip_grad_norm_(eeg_net.parameters(), max_norm=1.0)
+                nn.utils.clip_grad_norm_(audio_net.parameters(), max_norm=1.0)
                 optimizer.step()
 
             total_loss += loss.item()
@@ -618,6 +515,7 @@ def train_model(eeg_net, audio_net, loss_fn, optimizer, train_subjects, valid_su
     training_results_path = os.path.join(configurations['output_paths']['training'],
                                          f"{condition}_{band}_{feature_name}_training_results.txt")
     os.makedirs(os.path.dirname(training_results_path), exist_ok=True)
+    eeg_data_path = '/Users/efeoztufan/Desktop/A-Thesis/Datasets/Ali/EEG'
     # Prepare to track losses for reporting
     train_losses = []
     validation_losses = []
@@ -629,19 +527,19 @@ def train_model(eeg_net, audio_net, loss_fn, optimizer, train_subjects, valid_su
 
             # Training phase
             train_loss = run_phase(train_subjects, audio_path, feature_extractor, eeg_net, audio_net, optimizer,
-                                   loss_fn, 'train', batch_size,band,condition)
+                                   loss_fn, 'train', batch_size, band, condition, eeg_data_path)
             train_losses.append(train_loss)
 
             # Validation phase
             valid_loss = run_phase(valid_subjects, audio_path, feature_extractor, eeg_net, audio_net, None,
-                                   loss_fn, 'validate', batch_size, band, condition)
+                                   loss_fn, 'validate', batch_size, band, condition, eeg_data_path)
             file.write(f'Epoch {epoch + 1}: Training Loss = {train_loss}, Validation Loss = {valid_loss}\n')
             validation_losses.append(valid_loss)
 
             # Optionally run a testing phase after the last training epoch
             if test_subjects:
                 test_loss = run_phase(test_subjects, audio_path, feature_extractor, eeg_net, audio_net, None,
-                                      loss_fn, 'test', batch_size, band, condition)
+                                      loss_fn, 'test', batch_size, band, condition, eeg_data_path)
                 file.write(f'Final Test Loss = {test_loss}\n')
 
             # Log average losses for this configuration
@@ -660,7 +558,7 @@ def evaluate_model(configurations, condition, band, feature_name, subjects):
                                     f"{condition}_{band}_{feature_name}_audio_net.pth")
 
     # Load the models
-    eeg_net = EEGNet2D(input_channels=1, input_height=17, input_width=7500, transform_type=condition)
+    eeg_net = EEGNet2D(input_channels=1, input_height=10, input_width=640, transform_type=condition)
     audio_net = AudioFeatureNet2D(feature_type=feature_name)  # Ensure this aligns with your updated class definition
     eeg_net.load_state_dict(torch.load(eeg_model_path))
     audio_net.load_state_dict(torch.load(audio_model_path))
@@ -672,10 +570,10 @@ def evaluate_model(configurations, condition, band, feature_name, subjects):
 
     for subject_id in subjects:
         # Load and process data for each subject
-        eeg_batches = load_and_segment_eeg(subject_id, SEGMENT_LENGTH_SEC, SAMPLE_RATE_EEG, 256, band, condition)[
+        eeg_batches = load_and_segment_eeg(subject_id, SEGMENT_LENGTH_SEC, SAMPLE_RATE_EEG, 64, band, condition)[
             'segments']
         audio_batches = segment_and_extract_features(audio_path, SEGMENT_LENGTH_SEC, SAMPLE_RATE_AUDIO,
-                                                     feature_extractor, 256)
+                                                     feature_extractor, 64)
 
         # Accumulate and average features over all batches
         all_eeg_features, all_audio_features = [], []
@@ -736,34 +634,33 @@ def run_full_analysis(configurations):
 
     # Call this function at the start of your `run_full_analysis`
     ensure_directories_exist(configurations)
-
-    subjects = ['S01', 'S03', 'S04', 'S05', 'S06', 'S08', 'S10', 'S11', 'S12',
-                'S13', 'S14', 'S15', 'S16', 'S17', 'S18', 'S19', 'S20', 'S21', 'S22',
-                'S25', 'S26', 'S34', 'S35', 'S36', 'S37', 'S38', 'S39', 'S40', 'S41', 'S42']
-    bads = ['S02','S07', 'S09', 'S23', 'S24', 'S27', 'S28', 'S29', 'S30', 'S31', 'S32', 'S33',
-            'S43', 'S46', 'S47', 'S49', 'S44', 'S45', 'S48']  # 'S44', 'S45', 'S48'  not bad use for evaluation
-    subjects = [s for s in subjects if s not in bads]
+    # Define the path to the directory containing the .mat files
+    data_dir = '/Users/efeoztufan/Desktop/A-Thesis/Datasets/Ali/EEG'  # Replace with your actual directory path
+    mat_files = [f for f in os.listdir(data_dir) if f.endswith('.mat')]
+    subjects = [os.path.splitext(f)[0].split('_')[0] for f in mat_files]
     random.shuffle(subjects)
-    train_subjects = subjects[:23]
-    valid_subjects = subjects[23:28]
-    test_subjects = subjects[28:]
-    subjects_to_evaluate = ['S44', 'S45', 'S48']
+
+
+    train_subjects = subjects[:12]
+    valid_subjects = subjects[12:15]
+    test_subjects = subjects[15:]
+    subjects_to_evaluate = subjects[15:]
 
     # Loop over conditions, bands, and feature types
     for condition in configurations['eeg_conditions']:
         for band in configurations['frequency_bands']:
             for feature_name, feature_class in configurations['audio_features'].items():
                 # Initialize networks and optimizer
-                eeg_net = EEGNet2D(input_channels=1, input_height=17, input_width=7500, transform_type=condition)
+                eeg_net = EEGNet2D(input_channels=1, input_height=10, input_width=7500, transform_type=condition)
                 audio_net = AudioFeatureNet2D(feature_type=feature_name)
                 loss_fn = DCCALoss()
-                optimizer = optim.Adam(list(eeg_net.parameters()) + list(audio_net.parameters()), lr=0.05)
-
+                optimizer =torch.optim.Adam(list(eeg_net.parameters()) + list(audio_net.parameters()), lr=0.01)
+                scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 10, gamma = 0.1)
                 feature_extractor = feature_class(SAMPLE_RATE_AUDIO)
                 audio_path = configurations['audio_path']
 
                 # Train model
-                train_model(eeg_net, audio_net, loss_fn, optimizer, train_subjects, valid_subjects, test_subjects, feature_extractor, condition, band, feature_name, audio_path, 256, 1)
+                train_model(eeg_net, audio_net, loss_fn, optimizer, train_subjects, valid_subjects, test_subjects, feature_extractor, condition, band, feature_name, audio_path, 64, 7)
 
                 # Save models
                 save_model_parameters(eeg_net,audio_net,condition,band,feature_name,configurations)

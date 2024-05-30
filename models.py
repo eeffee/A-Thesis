@@ -172,17 +172,22 @@ class MFCCSpectrum:
         """
         self.sample_rate = sample_rate
         self.n_mfcc = n_mfcc
-        self.n_fft = n_fft
-        self.hop_length = hop_length if hop_length is not None else n_fft // 2
+        self.window_length_sec = 0.01  # 10 ms window length
+        self.n_fft = int(
+            self.sample_rate * self.window_length_sec)  # Calculate n_fft based on window length and sample rate
+        self.hop_length = hop_length if hop_length is not None else self.n_fft // 2  # Default to 50% overlap if not specified
         self.n_mels = n_mels
 
+        # Initialize the MFCC transform with the calculated parameters
         self.mfcc_transform = torchaudio.transforms.MFCC(
             sample_rate=self.sample_rate,
             n_mfcc=self.n_mfcc,
             melkwargs={
                 'n_fft': self.n_fft,
                 'n_mels': self.n_mels,
-                'hop_length': self.hop_length
+                'hop_length': self.hop_length,
+                'win_length': self.n_fft,  # Optionally set win_length to n_fft
+                'window_fn': torch.hamming_window
             }
         )
 
@@ -229,16 +234,22 @@ class DeltaDeltaMFCC:
         """
         self.sample_rate = sample_rate
         self.n_mfcc = n_mfcc
-        self.n_fft = n_fft
-        self.hop_length = hop_length if hop_length is not None else n_fft // 2
+        self.window_length_sec = 0.01  # 10 ms window length
+        self.n_fft = int(
+            self.sample_rate * self.window_length_sec)  # Calculate n_fft based on window length and sample rate
+        self.hop_length = hop_length if hop_length is not None else self.n_fft // 2  # Default to 50% overlap if not specified
         self.n_mels = n_mels
+
+        # Initialize the MFCC transform with the calculated parameters
         self.mfcc_transform = torchaudio.transforms.MFCC(
             sample_rate=self.sample_rate,
             n_mfcc=self.n_mfcc,
             melkwargs={
                 'n_fft': self.n_fft,
                 'n_mels': self.n_mels,
-                'hop_length': self.hop_length
+                'hop_length': self.hop_length,
+                'win_length': self.n_fft,  # Optionally set win_length to n_fft
+                'window_fn': torch.hamming_window
             }
         )
 
