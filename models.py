@@ -14,7 +14,7 @@ from torch import nn
 from scipy.signal import hilbert
 
 class MelSpectrum:
-    def __init__(self, sample_rate: int, n_mels=40, n_fft=512, hop_length=None,
+    def __init__(self, sample_rate: int, n_mels=40, n_fft=16, hop_length=None,
                  normalized=True, use_log_scale=True, log_scale_eps=1e-5):
         self.sample_rate = sample_rate
         self.n_mels = n_mels
@@ -64,7 +64,7 @@ class MelSpectrum:
 
 
 class PhaseSpectrum:
-    def __init__(self, sample_rate: int, n_fft: int = 512, hop_length: int = None):
+    def __init__(self, sample_rate: int, n_fft: int = 16, hop_length: int = None):
         """
         Initializes the PhaseSpectrum class with necessary parameters.
 
@@ -159,7 +159,7 @@ class SpeechEnvelope:
 
 
 class MFCCSpectrum:
-    def __init__(self, sample_rate: int, n_mfcc: int = 13, n_fft: int = 2048, hop_length: int = None, n_mels: int = 40):
+    def __init__(self, sample_rate: int, n_mfcc: int = 13, n_fft: int = 16, hop_length: int = None, n_mels: int = 40):
         """
         Initializes the MFCCSpectrum class with necessary parameters.
 
@@ -221,7 +221,7 @@ class MFCCSpectrum:
         return self._compute(wav)
 
 class DeltaDeltaMFCC:
-    def __init__(self, sample_rate: int, n_mfcc: int = 13, n_fft: int = 2048, hop_length: int = None, n_mels: int = 40):
+    def __init__(self, sample_rate: int, n_mfcc: int = 13, n_fft: int = 16, hop_length: int = None, n_mels: int = 40):
         """
         Initializes the DeltaDeltaMFCC class with necessary parameters.
 

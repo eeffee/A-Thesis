@@ -20,13 +20,13 @@ configurations = {
     'eeg_conditions': ['phase', 'raw'],
     'frequency_bands': ['theta', 'delta', 'beta', 'speech'],
     'audio_features': {
-
+        'Mel': MelSpectrum,
         'Envelope': SpeechEnvelope,
         'Phase': PhaseSpectrum,
         'DeltaDeltaMFCC' : DeltaDeltaMFCC,
         'MFCC': MFCCSpectrum,
         'PhaseOfEnvelope': PhaseOfEnvelope,
-        'Mel': MelSpectrum,
+
 
     },
     'output_paths': {
