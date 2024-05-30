@@ -37,7 +37,7 @@ configurations = {
         'audio' : '/home/oztufan/resultsDCCA/audio/'
     },
     'audio_path': '/home/oztufan/D1/Audio/AllStories-250Hz.wav',
-    'data_path': 'data/'
+    'eeg_path': '/home/oztufan/D1/EEG'
 }
 
 # Define constants and parameters
@@ -231,8 +231,6 @@ def load_and_segment_eeg(subject_id, segment_length_sec, sample_rate_eeg, batch_
     return {
         'segments': segments
     }
-
-
 
 
 
@@ -524,7 +522,7 @@ def train_model(eeg_net, audio_net, loss_fn, optimizer, scheduler, train_subject
     training_results_path = os.path.join(configurations['output_paths']['training'],
                                          f"{condition}_{band}_{feature_name}_training_results.txt")
     os.makedirs(os.path.dirname(training_results_path), exist_ok=True)
-    eeg_data_path = '/home/oztufan/D1/EEG'
+    eeg_data_path = configurations['eeg_path']
     # Prepare to track losses for reporting
     train_losses = []
     validation_losses = []
@@ -576,13 +574,13 @@ def evaluate_model(configurations, condition, band, feature_name, subjects):
     audio_net.load_state_dict(torch.load(audio_model_path))
     eeg_net.eval()
     audio_net.eval()
-
+    eeg_path = configurations['eeg_path']
     audio_path = configurations['audio_path']
     feature_extractor = configurations['audio_features'][feature_name](SAMPLE_RATE_AUDIO)
 
     for subject_id in subjects:
         # Load and process data for each subject
-        eeg_batches = load_and_segment_eeg(subject_id, SEGMENT_LENGTH_SEC, SAMPLE_RATE_EEG, 64, band, condition)[
+        eeg_batches = load_and_segment_eeg(subject_id, SEGMENT_LENGTH_SEC, SAMPLE_RATE_EEG, 64, band, condition, eeg_path)[
             'segments']
         audio_batches = segment_and_extract_features(audio_path, SEGMENT_LENGTH_SEC,
                                                      feature_extractor, 64)
