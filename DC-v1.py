@@ -678,7 +678,7 @@ def run_full_analysis(configurations):
     # Call this function at the start of your `run_full_analysis`
     ensure_directories_exist(configurations)
     # Define the path to the directory containing the .mat files
-    data_dir = '/home/oztufan/D1/EEG'  # Replace with your actual directory path
+    data_dir = configurations['eeg_path']  # Replace with your actual directory path
     mat_files = [f for f in os.listdir(data_dir) if f.endswith('.mat')]
     subjects = [os.path.splitext(f)[0].split('_')[0] for f in mat_files]
     random.shuffle(subjects)
