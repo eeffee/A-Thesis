@@ -10,12 +10,15 @@ from scipy.signal import resample, hilbert
 from scipy.io import wavfile
 import h5py
 import pandas as pd
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import train_test_split
 
 torch.autograd.set_detect_anomaly(True)
 
 configurations = {
     'eeg_conditions': ['phase', 'raw'],
-    'frequency_bands': ['gamma','theta', 'delta', 'beta', 'speech'],
+    'frequency_bands': ['theta', 'delta', 'beta', 'speech'],
     'audio_features': {
 
         'Envelope': SpeechEnvelope,
@@ -33,12 +36,12 @@ configurations = {
         'eeg' : '/home/oztufan/resultsDCCA/eeg/',
         'audio' : '/home/oztufan/resultsDCCA/audio/'
     },
-    'audio_path': '/home/oztufan/resultsDCCA/Ali/Audio/AllStories-250Hz.wav',
+    'audio_path': '/home/oztufan/D1/Audio/AllStories-250Hz.wav',
     'data_path': 'data/'
 }
 
 # Define constants and parameters
-SAMPLE_RATE_AUDIO = 44100  # Audio sample rate
+SAMPLE_RATE_AUDIO = 64  # Audio sample rate
 SAMPLE_RATE_EEG = 500  # EEG sample rate
 SEGMENT_LENGTH_SEC = 10  # Length of each audio and EEG segment in seconds
 
@@ -326,7 +329,7 @@ class AudioFeatureNet2D(nn.Module):
 
 
 
-def segment_and_extract_features(audio_path, segment_length_sec, sample_rate_audio, feature_extractor, batch_size=64):
+def segment_and_extract_features(audio_path, segment_length_sec, feature_extractor, batch_size=64):
     # Load audio data
     sr, audio = wavfile.read(audio_path)
     sample_rate_audio = sr
@@ -444,7 +447,7 @@ def run_phase(subjects, audio_path, feature_extractor, eeg_net, audio_net, optim
         print(subject_id)
         eeg_batches = load_and_segment_eeg(subject_id, SEGMENT_LENGTH_SEC, SAMPLE_RATE_EEG, batch_size, frequency_band,
                                            eeg_condition, eeg_path)['segments']
-        audio_batches = segment_and_extract_features(audio_path, SEGMENT_LENGTH_SEC, SAMPLE_RATE_AUDIO,
+        audio_batches = segment_and_extract_features(audio_path, SEGMENT_LENGTH_SEC,
                                                      feature_extractor, batch_size)
         # Remove last element becuase tensors have different batch sizes
         audio_batches = audio_batches[:-1]
@@ -509,13 +512,13 @@ def check_grads(eeg_net, audio_net):
             print(f"Gradient for {name}: mean={param.grad.mean().item()}, std={param.grad.std().item()}, min={param.grad.min().item()}, max={param.grad.max().item()}")
 
 
-def train_model(eeg_net, audio_net, loss_fn, optimizer, train_subjects, valid_subjects, test_subjects, feature_extractor, condition, band, feature_name, audio_path, batch_size, num_epochs=13):
+def train_model(eeg_net, audio_net, loss_fn, optimizer, scheduler, train_subjects, valid_subjects, test_subjects, feature_extractor, condition, band, feature_name, audio_path, batch_size, num_epochs=13):
 
     print(f"Training for {condition} in {band} band using {feature_name} features.")
     training_results_path = os.path.join(configurations['output_paths']['training'],
                                          f"{condition}_{band}_{feature_name}_training_results.txt")
     os.makedirs(os.path.dirname(training_results_path), exist_ok=True)
-    eeg_data_path = '/Users/efeoztufan/Desktop/A-Thesis/Datasets/Ali/EEG'
+    eeg_data_path = '/home/oztufan/D1/EEG'
     # Prepare to track losses for reporting
     train_losses = []
     validation_losses = []
@@ -536,8 +539,11 @@ def train_model(eeg_net, audio_net, loss_fn, optimizer, train_subjects, valid_su
             file.write(f'Epoch {epoch + 1}: Training Loss = {train_loss}, Validation Loss = {valid_loss}\n')
             validation_losses.append(valid_loss)
 
+            # Step the scheduler
+            scheduler.step()
+
             # Optionally run a testing phase after the last training epoch
-            if test_subjects:
+            if epoch == num_epochs -1 and test_subjects:
                 test_loss = run_phase(test_subjects, audio_path, feature_extractor, eeg_net, audio_net, None,
                                       loss_fn, 'test', batch_size, band, condition, eeg_data_path)
                 file.write(f'Final Test Loss = {test_loss}\n')
@@ -572,8 +578,11 @@ def evaluate_model(configurations, condition, band, feature_name, subjects):
         # Load and process data for each subject
         eeg_batches = load_and_segment_eeg(subject_id, SEGMENT_LENGTH_SEC, SAMPLE_RATE_EEG, 64, band, condition)[
             'segments']
-        audio_batches = segment_and_extract_features(audio_path, SEGMENT_LENGTH_SEC, SAMPLE_RATE_AUDIO,
+        audio_batches = segment_and_extract_features(audio_path, SEGMENT_LENGTH_SEC,
                                                      feature_extractor, 64)
+        # Remove last element becuase tensors have different batch sizes
+        audio_batches = audio_batches[:-1]
+        eeg_batches = eeg_batches[:-1]
 
         # Accumulate and average features over all batches
         all_eeg_features, all_audio_features = [], []
@@ -585,11 +594,26 @@ def evaluate_model(configurations, condition, band, feature_name, subjects):
             all_eeg_features.append(eeg_features)
             all_audio_features.append(audio_features)
 
-        mean_eeg_features = torch.cat(all_eeg_features)
-        mean_audio_features = torch.cat(all_audio_features)
+        # Concatenate all features for regression and correlation
+        all_eeg_features = torch.cat(all_eeg_features).detach().numpy()
+        all_audio_features = torch.cat(all_audio_features).detach().numpy()
+
+        # Split data into training and testing sets
+        audio_train, audio_test, eeg_train, eeg_test = train_test_split(all_audio_features, all_eeg_features,
+                                                                        test_size=0.3, random_state=42)
+
+        # Fit Linear Regression model on the training data
+        linear_model = LinearRegression()
+        linear_model.fit(audio_train, eeg_train)
+
+        # Predict on the test data
+        predicted_eeg_features = linear_model.predict(audio_test)
+
+        # Calculate MSE for the model on the test data
+        mse = mean_squared_error(eeg_test, predicted_eeg_features)
 
         # Compute correlation matrix
-        correlations = compute_correlation_matrix(mean_eeg_features, mean_audio_features)
+        correlations = compute_correlation_matrix(all_eeg_features, all_audio_features)
         average_correlation = torch.mean(correlations).item()
         avg_diagonal = torch.mean(torch.diag(correlations)).item()
 
@@ -600,7 +624,7 @@ def evaluate_model(configurations, condition, band, feature_name, subjects):
                                            f"{condition}_{band}_{feature_name}_{subject_id}_average_correlation.txt")
         np.save(detailed_output_path, correlations.detach().numpy())
         with open(summary_output_path, 'w') as f:
-            f.write(f"Average Correlation: {average_correlation}\nDiagonal Average: {avg_diagonal}\n")
+            f.write(f"Average Correlation: {average_correlation}\nDiagonal Average: {avg_diagonal}\nMSE of linear model: {mse}\n")
 
 
         print(f"Correlation output saved successfully for {condition} {band} {feature_name} with subject {subject_id}.")
@@ -635,7 +659,7 @@ def run_full_analysis(configurations):
     # Call this function at the start of your `run_full_analysis`
     ensure_directories_exist(configurations)
     # Define the path to the directory containing the .mat files
-    data_dir = '/Users/efeoztufan/Desktop/A-Thesis/Datasets/Ali/EEG'  # Replace with your actual directory path
+    data_dir = '/home/oztufan/D1/EEG'  # Replace with your actual directory path
     mat_files = [f for f in os.listdir(data_dir) if f.endswith('.mat')]
     subjects = [os.path.splitext(f)[0].split('_')[0] for f in mat_files]
     random.shuffle(subjects)
@@ -651,7 +675,7 @@ def run_full_analysis(configurations):
         for band in configurations['frequency_bands']:
             for feature_name, feature_class in configurations['audio_features'].items():
                 # Initialize networks and optimizer
-                eeg_net = EEGNet2D(input_channels=1, input_height=10, input_width=7500, transform_type=condition)
+                eeg_net = EEGNet2D(input_channels=1, input_height=10, input_width=640, transform_type=condition)
                 audio_net = AudioFeatureNet2D(feature_type=feature_name)
                 loss_fn = DCCALoss()
                 optimizer =torch.optim.Adam(list(eeg_net.parameters()) + list(audio_net.parameters()), lr=0.01)
@@ -660,7 +684,7 @@ def run_full_analysis(configurations):
                 audio_path = configurations['audio_path']
 
                 # Train model
-                train_model(eeg_net, audio_net, loss_fn, optimizer, train_subjects, valid_subjects, test_subjects, feature_extractor, condition, band, feature_name, audio_path, 64, 7)
+                train_model(eeg_net, audio_net, loss_fn, optimizer, scheduler, train_subjects, valid_subjects, test_subjects, feature_extractor, condition, band, feature_name, audio_path, 64, 7)
 
                 # Save models
                 save_model_parameters(eeg_net,audio_net,condition,band,feature_name,configurations)
