@@ -36,7 +36,7 @@ configurations = {
         'eeg' : '/home/oztufan/resultsDCCA/eeg/',
         'audio' : '/home/oztufan/resultsDCCA/audio/'
     },
-    'audio_path': '/home/oztufan/D1/Audio/AllStories-250Hz.wav',
+    'audio_path': '/home/oztufan/D1/AllStories-250Hz.wav',
     'eeg_path': '/home/oztufan/D1/EEG'
 }
 

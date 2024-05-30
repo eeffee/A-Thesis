@@ -30,11 +30,11 @@ configurations = {
 
     },
     'output_paths': {
-        'model': '/home/oztufan/resultsDCCA/models/',
-        'training': '/home/oztufan/resultsDCCA/trainresults/',
-        'evaluation': '/home/oztufan/resultsDCCA/evalresults/',
-        'eeg': '/home/oztufan/resultsDCCA/eeg/',
-        'audio': '/home/oztufan/resultsDCCA/audio/'
+        'model': '/home/oztufan/resultsDC/models/',
+        'training': '/home/oztufan/resultsDC/trainresults/',
+        'evaluation': '/home/oztufan/resultsDC/evalresults/',
+        'eeg': '/home/oztufan/resultsDC/eeg/',
+        'audio': '/home/oztufan/resultsDC/audio/'
     },
     'audio_path': '/home/oztufan/D1/AllStories-250Hz.wav',
     'eeg_path': '/home/oztufan/D1/EEG'
@@ -367,42 +367,57 @@ def segment_and_extract_features(audio_path, segment_length_sec, feature_extract
     return batched_features
 
 
-class DCCALoss(nn.Module):
+class DistanceCorrelation(nn.Module):
     def __init__(self):
-        super(DCCALoss, self).__init__()
+        super(DistanceCorrelation, self).__init__()
 
-    def forward(self, u, v):
-        # Mean centering
-        u_mean = torch.mean(u, dim=0)
-        v_mean = torch.mean(v, dim=0)
-        u_centered = u - u_mean  # Out-of-place operation
-        v_centered = v - v_mean  # Out-of-place operation
+    @staticmethod
+    def pairwise_distances(x):
+        # Computing pairwise distances using efficient matrix operations
+        x_norm = (x**2).sum(1).view(-1, 1)
+        y_t = torch.transpose(x, 0, 1)
+        y_norm = x_norm.view(1, -1)
+        dist = x_norm + y_norm - 2.0 * torch.mm(x, y_t)
+        dist[dist != dist] = 0  # replace NaNs with 0
+        dist = torch.sqrt(dist)
+        return dist
 
-        # Compute covariance matrices
-        N = u.size(0)
-        sigma_uu = torch.matmul(u_centered.T, u_centered) / (N - 1)
-        sigma_vv = torch.matmul(v_centered.T, v_centered) / (N - 1)
-        sigma_uv = torch.matmul(u_centered.T, v_centered) / (N - 1)
+    def distance_covariance(self, X, Y):
+        # Calculate pairwise distances
+        A = self.pairwise_distances(X)
+        B = self.pairwise_distances(Y)
 
-        # Regularize covariances by adding small identity matrices
-        d_u = sigma_uu.size(0)
-        d_v = sigma_vv.size(0)
-        identity_u = torch.eye(d_u, dtype=sigma_uu.dtype, device=sigma_uu.device)
-        identity_v = torch.eye(d_v, dtype=sigma_vv.dtype, device=sigma_vv.device)
-        sigma_uu = sigma_uu + 1e-3 * identity_u  # Out-of-place operation
-        sigma_vv = sigma_vv + 1e-3 * identity_v  # Out-of-place operation
-        cond_u = torch.linalg.cond(sigma_uu)
-        cond_v = torch.linalg.cond(sigma_vv)
-        if cond_u > 1e10 or cond_v > 1e10:
-            print("high condition values are detected. Increase reg!")
-        # Compute the matrix product
-        inv_sigma_uu = torch.linalg.inv(sigma_uu)
-        inv_sigma_vv = torch.linalg.inv(sigma_vv)
-        T = torch.matmul(inv_sigma_uu, torch.matmul(sigma_uv, inv_sigma_vv))
+        # Mean centering the distance matrices
+        A_mean_row = A.mean(dim=1, keepdim=True)
+        A_mean_col = A.mean(dim=0, keepdim=True)
+        A_mean_total = A.mean()
+        A_centered = A - A_mean_row - A_mean_col + A_mean_total
 
-        # Loss is the negative trace  of that. which represnts the sum of cannonical correlataions
-        loss = -torch.trace(torch.matmul(T, T.T))
-        return loss
+        B_mean_row = B.mean(dim=1, keepdim=True)
+        B_mean_col = B.mean(dim=0, keepdim=True)
+        B_mean_total = B.mean()
+        B_centered = B - B_mean_row - B_mean_col + B_mean_total
+
+        # Calculate distance covariance
+        cov_ab = (A_centered * B_centered).sum() / X.size(0)**2
+        return cov_ab
+
+    def distance_correlation(self, X, Y):
+        # Calculate distance covariance for X, Y and each with themselves
+        cov_ab = self.distance_covariance(X, Y)
+        cov_aa = self.distance_covariance(X, X)
+        cov_bb = self.distance_covariance(Y, Y)
+
+        # Compute distance correlation
+        if cov_aa == 0 or cov_bb == 0:  # Avoid division by zero
+            return torch.tensor(0.0)
+        else:
+            return cov_ab / torch.sqrt(cov_aa * cov_bb)
+
+    def forward(self, X, Y):
+        # Compute distance correlation as the loss
+        dcor_value = self.distance_correlation(X, Y)
+        return -dcor_value #Minimize this loss to maximize correlation
 
 
 class AliDataset:
@@ -576,7 +591,7 @@ def evaluate_model(configurations, condition, band, feature_name, subjects):
                                   f"{condition}_{band}_{feature_name}_eeg_net.pth")
     audio_model_path = os.path.join(configurations['output_paths']['audio'],
                                     f"{condition}_{band}_{feature_name}_audio_net.pth")
-
+    distance_correlation = DistanceCorrelation()
     # Load the models
     eeg_net = EEGNet2D(input_channels=1, input_height=10, input_width=640, transform_type=condition)
     audio_net = AudioFeatureNet2D(feature_type=feature_name)  # Ensure this aligns with your updated class definition
@@ -590,8 +605,7 @@ def evaluate_model(configurations, condition, band, feature_name, subjects):
 
     for subject_id in subjects:
         # Load and process data for each subject
-        eeg_batches = \
-        load_and_segment_eeg(subject_id, SEGMENT_LENGTH_SEC, SAMPLE_RATE_EEG, 64, band, condition, eeg_path)[
+        eeg_batches = load_and_segment_eeg(subject_id, SEGMENT_LENGTH_SEC, SAMPLE_RATE_EEG, 64, band, condition, eeg_path)[
             'segments']
         audio_batches = segment_and_extract_features(audio_path, SEGMENT_LENGTH_SEC,
                                                      feature_extractor, 64)
@@ -611,6 +625,14 @@ def evaluate_model(configurations, condition, band, feature_name, subjects):
             all_audio_features.append(audio_features)
 
         # Concatenate all features for regression and correlation
+        mean_eeg_features = torch.cat(all_eeg_features)
+        mean_audio_features = torch.cat(all_audio_features)
+
+        # Calculate distance correlation
+        dcor_value = distance_correlation.distance_correlation(mean_eeg_features, mean_audio_features)
+        print(f"Distance Correlation: {dcor_value.item()}")
+
+        # Regression
         all_eeg_features = torch.cat(all_eeg_features).detach().numpy()
         all_audio_features = torch.cat(all_audio_features).detach().numpy()
 
@@ -628,23 +650,17 @@ def evaluate_model(configurations, condition, band, feature_name, subjects):
         # Calculate MSE for the model on the test data
         mse = mean_squared_error(eeg_test, predicted_eeg_features)
 
-        # Compute correlation matrix
-        correlations = compute_correlation_matrix(all_eeg_features, all_audio_features)
-        average_correlation = torch.mean(correlations).item()
-        avg_diagonal = torch.mean(torch.diag(correlations)).item()
 
         # Save correlation results for each subject
-        detailed_output_path = os.path.join(output_base_path,
-                                            f"{condition}_{band}_{feature_name}_{subject_id}_correlation.npy")
         summary_output_path = os.path.join(output_base_path,
-                                           f"{condition}_{band}_{feature_name}_{subject_id}_average_correlation.txt")
-        np.save(detailed_output_path, correlations.detach().numpy())
+                                           f"{condition}_{band}_{feature_name}_{subject_id}_dcorr.txt")
+
         with open(summary_output_path, 'w') as f:
-            f.write(
-                f"Average Correlation: {average_correlation}\nDiagonal Average: {avg_diagonal}\nMSE of linear model: {mse}\n")
+            f.write(f"Distance Correlation: {dcor_value}\nMSE of linear model: {mse}\n")
+
 
         print(f"Correlation output saved successfully for {condition} {band} {feature_name} with subject {subject_id}.")
-        print(f"Average correlation ({average_correlation}) saved to {summary_output_path}.")
+        print(f"Average correlation ({dcor_value}) saved to {summary_output_path}.")
 
 
 def save_model_parameters(eeg_net, audio_net, condition, band, feature_name, configurations):
@@ -695,7 +711,7 @@ def run_full_analysis(configurations):
                 # Initialize networks and optimizer
                 eeg_net = EEGNet2D(input_channels=1, input_height=10, input_width=640, transform_type=condition)
                 audio_net = AudioFeatureNet2D(feature_type=feature_name)
-                loss_fn = DCCALoss()
+                loss_fn = DistanceCorrelation()
                 optimizer = torch.optim.Adam(list(eeg_net.parameters()) + list(audio_net.parameters()), lr=0.01)
                 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
                 feature_extractor = feature_class(SAMPLE_RATE_AUDIO)
