@@ -30,14 +30,14 @@ configurations = {
 
     },
     'output_paths': {
-        'model': '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDC/models/',
-        'training': '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDC/trainresults/',
-        'evaluation': '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDC/evalresults/',
-        'eeg': '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDC/eeg/',
-        'audio': '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDC/audio/'
+        'model': '/home/oztufan/resultsDC/models/',
+        'training': '/home/oztufan/resultsDC/trainresults/',
+        'evaluation': '/home/oztufan/resultsDC/evalresults/',
+        'eeg': '/home/oztufan/resultsDC/eeg/',
+        'audio': '/home/oztufan/resultsDC/audio/'
     },
-    'audio_path': '/Users/efeoztufan/Desktop/A-Thesis/Datasets/Ali/AllStories-250Hz.wav',
-    'eeg_path': '/Users/efeoztufan/Desktop/A-Thesis/Datasets/Ali/EEG'
+    'audio_path': '/home/oztufan/D2/AllStories-250Hz.wav',
+    'eeg_path': '/home/oztufan/D2/EEG'
 }
 
 # Define constants and parameters
