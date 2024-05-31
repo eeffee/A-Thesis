@@ -30,14 +30,14 @@ configurations = {
 
     },
     'output_paths': {
-        'model': '/home/oztufan/resultsDC/models/',
-        'training': '/home/oztufan/resultsDC/trainresults/',
-        'evaluation': '/home/oztufan/resultsDC/evalresults/',
-        'eeg': '/home/oztufan/resultsDC/eeg/',
-        'audio': '/home/oztufan/resultsDC/audio/'
+        'model': '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDC/models/',
+        'training': '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDC/trainresults/',
+        'evaluation': '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDC/evalresults/',
+        'eeg': '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDC/eeg/',
+        'audio': '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDC/audio/'
     },
-    'audio_path': '/home/oztufan/D2/AllStories-250Hz.wav',
-    'eeg_path': '/home/oztufan/D2/EEG'
+    'audio_path': '/Users/efeoztufan/Desktop/A-Thesis/Datasets/Ali/AllStories-250Hz.wav',
+    'eeg_path': '/Users/efeoztufan/Desktop/A-Thesis/Datasets/Ali/EEG'
 }
 
 # Define constants and parameters
@@ -335,27 +335,28 @@ def segment_and_extract_features(audio_path, segment_length_sec, feature_extract
     return batched_features
 
 
+
+
 class DistanceCorrelation(nn.Module):
     def __init__(self):
         super(DistanceCorrelation, self).__init__()
 
     @staticmethod
     def pairwise_distances(x):
-        # Computing pairwise distances using efficient matrix operations
-        x_norm = (x**2).sum(1).view(-1, 1)
+        # Ensure no negative values under sqrt by adding an epsilon
+        epsilon = 1e-8
+        x_norm = (x ** 2).sum(1).view(-1, 1)
         y_t = torch.transpose(x, 0, 1)
         y_norm = x_norm.view(1, -1)
         dist = x_norm + y_norm - 2.0 * torch.mm(x, y_t)
-        dist[dist != dist] = 0  # replace NaNs with 0
-        dist = torch.sqrt(dist)
+        dist = torch.clamp(dist, min=0.0)  # Clamp to prevent negative values
+        dist = torch.sqrt(dist + epsilon)  # Add epsilon for numerical stability
         return dist
 
     def distance_covariance(self, X, Y):
-        # Calculate pairwise distances
         A = self.pairwise_distances(X)
         B = self.pairwise_distances(Y)
 
-        # Mean centering the distance matrices
         A_mean_row = A.mean(dim=1, keepdim=True)
         A_mean_col = A.mean(dim=0, keepdim=True)
         A_mean_total = A.mean()
@@ -366,26 +367,24 @@ class DistanceCorrelation(nn.Module):
         B_mean_total = B.mean()
         B_centered = B - B_mean_row - B_mean_col + B_mean_total
 
-        # Calculate distance covariance
-        cov_ab = (A_centered * B_centered).sum() / X.size(0)**2
+        cov_ab = (A_centered * B_centered).sum() / X.size(0) ** 2
         return cov_ab
 
     def distance_correlation(self, X, Y):
-        # Calculate distance covariance for X, Y and each with themselves
         cov_ab = self.distance_covariance(X, Y)
         cov_aa = self.distance_covariance(X, X)
         cov_bb = self.distance_covariance(Y, Y)
 
-        # Compute distance correlation
-        if cov_aa == 0 or cov_bb == 0:  # Avoid division by zero
-            return torch.tensor(0.0)
-        else:
-            return cov_ab / torch.sqrt(cov_aa * cov_bb)
+        # Avoid division by zero by adding a small epsilon where necessary
+        epsilon = 1e-12
+        cov_aa = max(cov_aa, epsilon)
+        cov_bb = max(cov_bb, epsilon)
+
+        return cov_ab / torch.sqrt(cov_aa * cov_bb)
 
     def forward(self, X, Y):
-        # Compute distance correlation as the loss
         dcor_value = self.distance_correlation(X, Y)
-        return -dcor_value #Minimize this loss to maximize correlation
+        return -dcor_value  # Minimize this loss to maximize correlation
 
 
 class AliDataset:
