@@ -41,7 +41,7 @@ configurations = {
 }
 
 # Define constants and parameters
-SAMPLE_RATE_AUDIO = 64  # Audio sample rate
+SAMPLE_RATE_AUDIO = 128  # Audio sample rate
 SAMPLE_RATE_EEG = 500  # EEG sample rate
 SEGMENT_LENGTH_SEC = 10  # Length of each audio and EEG segment in seconds
 

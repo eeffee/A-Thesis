@@ -14,7 +14,7 @@ from torch import nn
 from scipy.signal import hilbert
 
 class MelSpectrum:
-    def __init__(self, sample_rate: int, n_mels=40, n_fft=16, hop_length=None,
+    def __init__(self, sample_rate: int, n_mels=20, n_fft=16, hop_length=None,
                  normalized=True, use_log_scale=True, log_scale_eps=1e-5):
         self.sample_rate = sample_rate
         self.n_mels = n_mels
@@ -159,7 +159,7 @@ class SpeechEnvelope:
 
 
 class MFCCSpectrum:
-    def __init__(self, sample_rate: int, n_mfcc: int = 13, n_fft: int = 16, hop_length: int = None, n_mels: int = 40):
+    def __init__(self, sample_rate: int, n_mfcc: int = 4, n_fft: int = 16, hop_length: int = None, n_mels: int = 16):
         """
         Initializes the MFCCSpectrum class with necessary parameters.
 
@@ -172,10 +172,9 @@ class MFCCSpectrum:
         """
         self.sample_rate = sample_rate
         self.n_mfcc = n_mfcc
-        self.window_length_sec = 0.01  # 10 ms window length
-        self.n_fft = int(
-            self.sample_rate * self.window_length_sec)  # Calculate n_fft based on window length and sample rate
-        self.hop_length = hop_length if hop_length is not None else self.n_fft // 2  # Default to 50% overlap if not specified
+        self.window_length_sec = 0.03  # 10 ms window length
+        self.n_fft = n_fft  # Calculate n_fft based on window length and sample rate
+        self.hop_length = hop_length if hop_length is not None else max(1, self.n_fft // 2)  # Ensure at least 1
         self.n_mels = n_mels
 
         # Initialize the MFCC transform with the calculated parameters
@@ -221,7 +220,7 @@ class MFCCSpectrum:
         return self._compute(wav)
 
 class DeltaDeltaMFCC:
-    def __init__(self, sample_rate: int, n_mfcc: int = 13, n_fft: int = 16, hop_length: int = None, n_mels: int = 40):
+    def __init__(self, sample_rate: int, n_mfcc: int = 4, n_fft: int = 16, hop_length: int = None, n_mels: int = 16):
         """
         Initializes the DeltaDeltaMFCC class with necessary parameters.
 
@@ -234,10 +233,9 @@ class DeltaDeltaMFCC:
         """
         self.sample_rate = sample_rate
         self.n_mfcc = n_mfcc
-        self.window_length_sec = 0.01  # 10 ms window length
-        self.n_fft = int(
-            self.sample_rate * self.window_length_sec)  # Calculate n_fft based on window length and sample rate
-        self.hop_length = hop_length if hop_length is not None else self.n_fft // 2  # Default to 50% overlap if not specified
+        self.window_length_sec = 0.03  # 30 ms window length
+        self.n_fft = n_fft  # Calculate n_fft based on window length and sample rate
+        self.hop_length = hop_length if hop_length is not None else max(1, self.n_fft // 2)  # Ensure at least 1
         self.n_mels = n_mels
 
         # Initialize the MFCC transform with the calculated parameters

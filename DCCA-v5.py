@@ -17,17 +17,15 @@ from sklearn.model_selection import train_test_split
 torch.autograd.set_detect_anomaly(True)
 
 configurations = {
-    'eeg_conditions': ['phase', 'raw'],
-    'frequency_bands': ['theta', 'delta', 'beta', 'speech'],
+    'eeg_conditions': ['raw','phase'],
+    'frequency_bands': ['theta', 'delta', 'beta', 'speech', 'gamma'],
     'audio_features': {
         'Mel': MelSpectrum,
         'Envelope': SpeechEnvelope,
-        'Phase': PhaseSpectrum,
-        'DeltaDeltaMFCC' : DeltaDeltaMFCC,
-        'MFCC': MFCCSpectrum,
         'PhaseOfEnvelope': PhaseOfEnvelope,
-
-
+        'Phase': PhaseSpectrum,
+        'DeltaDeltaMFCC': DeltaDeltaMFCC,
+        'MFCC': MFCCSpectrum
     },
     'output_paths': {
         'model': '/home/oztufan/resultsDCCA/models/',
@@ -41,7 +39,7 @@ configurations = {
 }
 
 # Define constants and parameters
-SAMPLE_RATE_AUDIO = 64  # Audio sample rate
+SAMPLE_RATE_AUDIO = 128  # Audio sample rate
 SAMPLE_RATE_EEG = 500  # EEG sample rate
 SEGMENT_LENGTH_SEC = 10  # Length of each audio and EEG segment in seconds
 
@@ -103,7 +101,7 @@ def apply_pca_to_eeg_data(eeg_data, n_components=10):
 
 
 class EEGNet2D(nn.Module):
-    def __init__(self, input_channels=1, input_height=10, input_width=640, transform_type=None):
+    def __init__(self, input_channels=1, input_height=10, input_width=1280, transform_type=None):
         super(EEGNet2D, self).__init__()
         self.transform_type = transform_type
 
@@ -126,7 +124,7 @@ class EEGNet2D(nn.Module):
         height = input_height  # No change in height dimension for kernel_size=(1, 3)
         width = input_width // 8  # Three max pooling layers with pool size (1, 2)
         output_size = 128 * height * width
-        output_size = 102400
+        output_size = 204800
         self.fc_layers = nn.Sequential(
             nn.Linear(output_size, 128),
             nn.Sigmoid(),
@@ -136,7 +134,7 @@ class EEGNet2D(nn.Module):
     def _initialize_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='sigmoid')
             elif isinstance(m, nn.Linear):
                 nn.init.normal_(m.weight, 0, 0.01)
 
@@ -161,7 +159,7 @@ def load_and_segment_eeg(subject_id, segment_length_sec, sample_rate_eeg, batch_
 
     # Assuming 'data' key contains the EEG data
     eeg_data = dataframes['data'].values.T  # Convert DataFrame to numpy array and transpose to shape (channels, samples)
-    goal_rate_eeg = 64
+    goal_rate_eeg = 128
     # Resample the EEG data if necessary
     if sample_rate_eeg != goal_rate_eeg:
         num_samples = eeg_data.shape[1]
@@ -190,9 +188,11 @@ def load_and_segment_eeg(subject_id, segment_length_sec, sample_rate_eeg, batch_
     # Extract phase if requested
     if transform_type == 'phase':
         eeg_data = extract_phase(eeg_data)
+        print(
+            f"Phase Extracted EEG data: mean={np.mean(eeg_data)}, std={np.std(eeg_data)}, min={np.min(eeg_data)}, max={np.max(eeg_data)}")
         # Check for NaN and infinite values after extracting phase
     check_for_nan_inf(eeg_data, "Phase Extracted EEG Data")
-    print(f"Phase Extracted EEG data: mean={np.mean(eeg_data)}, std={np.std(eeg_data)}, min={np.min(eeg_data)}, max={np.max(eeg_data)}")
+
 
     # Apply PCA
     eeg_data = apply_pca_to_eeg_data(eeg_data)
@@ -242,22 +242,22 @@ class AudioFeatureNet2D(nn.Module):
         # Define convolutional layer sizes based on feature type
         if feature_type == 'Mel':
             input_channels = 1
-            input_height, input_width = 40, 6
+            input_height, input_width = 20, 321
             pool_height, pool_width = 2, 2
         elif feature_type == 'Phase':
             input_channels = 1
-            input_height, input_width = 257, 6
-            pool_height, pool_width = 2, 2
+            input_height, input_width = 9, 321
+            #pool_height, pool_width = 2, 2
         elif feature_type in ['MFCC', 'DeltaDeltaMFCC']:
             input_channels = 1
-            input_height, input_width = 13, 3
-            pool_height, pool_width = 2, 1
+            input_height, input_width = 4, 161
+            #pool_height, pool_width = 2, 1
         elif feature_type == 'Envelope':
             input_channels = 1
             input_height, input_width = 1, 3
         elif feature_type == 'PhaseOfEnvelope':
             input_channels = 1
-            input_height, input_width = 1, 640
+            input_height, input_width = 1, 1280
         else:
             raise ValueError(f"Unsupported feature type: {feature_type}")
 
@@ -281,19 +281,16 @@ class AudioFeatureNet2D(nn.Module):
                 nn.Conv2d(input_channels, 32, kernel_size=(3, 3), padding=1),
                 nn.BatchNorm2d(32),
                 nn.ReLU(),
-                nn.MaxPool2d((pool_height, pool_width)),
                 nn.Conv2d(32, 64, kernel_size=(3, 3), padding=1),
                 nn.BatchNorm2d(64),
                 nn.ReLU(),
-                nn.MaxPool2d((pool_height, 1)),
                 nn.Conv2d(64, 128, kernel_size=(3, 3), padding=1),
                 nn.BatchNorm2d(128),
                 nn.ReLU(),
-                nn.MaxPool2d((pool_height, 1))
             )
             # Calculate the size after convolutions and pooling
-            height = input_height // (pool_height ** 3) # Height reduced three times
-            width = input_width // (pool_width * 1 * 1) # Width reduced only once
+            height = input_height
+            width = input_width
 
         output_size = 128 * height * width
 
@@ -336,7 +333,7 @@ def segment_and_extract_features(audio_path, segment_length_sec, feature_extract
     # Load audio data
     sr, audio = wavfile.read(audio_path)
     sample_rate_audio = sr
-    goal_sample_rate = 64  # Set your desired sample rate
+    goal_sample_rate = 128  # Set your desired sample rate
     if goal_sample_rate != sample_rate_audio:
         audio = resample(audio, int(len(audio) * goal_sample_rate / sample_rate_audio))
         sample_rate_audio = goal_sample_rate
