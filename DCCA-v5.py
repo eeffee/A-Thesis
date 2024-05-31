@@ -296,19 +296,16 @@ class AudioFeatureNet2D(nn.Module):
 
         self.fc_layers = nn.Sequential(
             nn.Linear(output_size, 128),
-            nn.ReLU(),
+            nn.Sigmoid(),
             nn.Linear(128, 32)
         )
 
     def _initialize_weights(self):
         for m in self.modules():
-            if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
-                nn.init.xavier_normal_(m.weight)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='sigmoid')
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, 0, 0.01)
 
     def forward(self, x):
         if torch.isnan(x).any():
@@ -564,7 +561,7 @@ def evaluate_model(configurations, condition, band, feature_name, subjects):
                                     f"{condition}_{band}_{feature_name}_audio_net.pth")
 
     # Load the models
-    eeg_net = EEGNet2D(input_channels=1, input_height=10, input_width=640, transform_type=condition)
+    eeg_net = EEGNet2D(input_channels=1, input_height=10, input_width=1280, transform_type=condition)
     audio_net = AudioFeatureNet2D(feature_type=feature_name)  # Ensure this aligns with your updated class definition
     eeg_net.load_state_dict(torch.load(eeg_model_path))
     audio_net.load_state_dict(torch.load(audio_model_path))
@@ -680,7 +677,7 @@ def run_full_analysis(configurations):
         for band in configurations['frequency_bands']:
             for feature_name, feature_class in configurations['audio_features'].items():
                 # Initialize networks and optimizer
-                eeg_net = EEGNet2D(input_channels=1, input_height=10, input_width=640, transform_type=condition)
+                eeg_net = EEGNet2D(input_channels=1, input_height=10, input_width=1280, transform_type=condition)
                 audio_net = AudioFeatureNet2D(feature_type=feature_name)
                 loss_fn = DCCALoss()
                 optimizer =torch.optim.Adam(list(eeg_net.parameters()) + list(audio_net.parameters()), lr=0.01)
