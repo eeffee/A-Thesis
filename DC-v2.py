@@ -17,27 +17,28 @@ from sklearn.model_selection import train_test_split
 torch.autograd.set_detect_anomaly(True)
 
 configurations = {
-    'eeg_conditions': ['phase', 'raw'],
+    'eeg_conditions': ['raw', 'phase'],
     'frequency_bands': ['theta', 'delta', 'beta', 'speech','gamma'],
     'audio_features': {
 
+
+        'Mel': MelSpectrum,
         'Envelope': SpeechEnvelope,
         'Phase': PhaseSpectrum,
         'DeltaDeltaMFCC': DeltaDeltaMFCC,
         'MFCC': MFCCSpectrum,
         'PhaseOfEnvelope': PhaseOfEnvelope,
-        'Mel': MelSpectrum,
 
     },
     'output_paths': {
-        'model': '/home/oztufan/resultsDC/models/',
-        'training': '/home/oztufan/resultsDC/trainresults/',
-        'evaluation': '/home/oztufan/resultsDC/evalresults/',
-        'eeg': '/home/oztufan/resultsDC/eeg/',
-        'audio': '/home/oztufan/resultsDC/audio/'
+        'model': '/home/oztufan/resultsDC2/models/',
+        'training': '/home/oztufan/resultsDC2/trainresults/',
+        'evaluation': '/home/oztufan/resultsDC2/evalresults/',
+        'eeg': '/home/oztufan/resultsDC2/eeg/',
+        'audio': '/home/oztufan/resultsDC2/audio/'
     },
-    'audio_path': '/home/oztufan/D2/AllStories-250Hz.wav',
-    'eeg_path': '/home/oztufan/D2/EEG'
+    'audio_path': '/home/oztufan/D3/AllStories-250Hz.wav',
+    'eeg_path': '/home/oztufan/D3/EEG'
 }
 
 # Define constants and parameters
@@ -76,53 +77,6 @@ def apply_pca_to_eeg_data(eeg_data, n_components=10):
     if np.isnan(transformed_data).any():
         raise ValueError("PCA transformed data contains NaN values")
     return transformed_data
-
-
-class EEGNet2D(nn.Module):
-    def __init__(self, input_channels=1, input_height=10, input_width=1280, transform_type=None):
-        super(EEGNet2D, self).__init__()
-        self.transform_type = transform_type
-
-        self.conv_layers = nn.Sequential(
-            nn.Conv2d(input_channels, 32, kernel_size=(1, 3), padding=(0, 1)),
-            nn.BatchNorm2d(32),
-            nn.Sigmoid(),
-            nn.MaxPool2d(kernel_size=(1, 2), stride=(1, 2)),  # Ensure stride <= kernel_size
-            nn.Conv2d(32, 64, kernel_size=(1, 3), padding=(0, 1)),
-            nn.BatchNorm2d(64),
-            nn.Sigmoid(),
-            nn.MaxPool2d(kernel_size=(1, 2), stride=(1, 2)),  # Ensure stride <= kernel_size
-            nn.Conv2d(64, 128, kernel_size=(1, 3), padding=(0, 1)),
-            nn.BatchNorm2d(128),
-            nn.Sigmoid(),
-            nn.MaxPool2d(kernel_size=(1, 2), stride=(1, 2))  # Ensure stride <= kernel_size
-        )
-        self._initialize_weights()
-
-        height = input_height  # No change in height dimension for kernel_size=(1, 3)
-        width = input_width // 8  # Three max pooling layers with pool size (1, 2)
-        output_size = 128 * height * width
-        output_size = 204800
-        self.fc_layers = nn.Sequential(
-            nn.Linear(output_size, 128),
-            nn.Sigmoid(),
-            nn.Linear(128, 32)
-        )
-
-    def _initialize_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='sigmoid')
-            elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, 0, 0.01)
-
-    def forward(self, x):
-        x = self.conv_layers(x)
-        x = x.view(x.size(0), -1)  # Flatten the output for the FC layer
-        x = self.fc_layers(x)
-        return x
-
-
 
 def load_and_segment_eeg(subject_id, segment_length_sec, sample_rate_eeg, batch_size=64, frequency_band=None,
                          transform_type=None, data_dir=None):
@@ -210,6 +164,63 @@ def load_and_segment_eeg(subject_id, segment_length_sec, sample_rate_eeg, batch_
         'segments': segments
     }
 
+class EEGNet2D(nn.Module):
+    def __init__(self, input_channels=1, input_height=10, input_width=1280, transform_type=None):
+        super(EEGNet2D, self).__init__()
+        self.transform_type = transform_type
+
+        # Convolutional layers
+        self.conv_layers = nn.Sequential(
+            nn.Conv2d(input_channels, 32, kernel_size=(1, 3), padding=(0, 1)),
+            nn.BatchNorm2d(32),
+            nn.LeakyReLU(0.01),
+            nn.Dropout(0.25),  # Dropout added after ReLU activation
+            nn.MaxPool2d(kernel_size=(1, 2), stride=(1, 2)),
+
+            nn.Conv2d(32, 64, kernel_size=(1, 3), padding=(0, 1)),
+            nn.BatchNorm2d(64),
+            nn.LeakyReLU(0.01),
+            nn.Dropout(0.25),  # Consistent dropout rate after each convolutional block
+            nn.MaxPool2d(kernel_size=(1, 2), stride=(1, 2)),
+
+            nn.Conv2d(64, 128, kernel_size=(1, 3), padding=(0, 1)),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.01),
+            nn.Dropout(0.25),  # Maintain dropout consistency
+            nn.MaxPool2d(kernel_size=(1, 2), stride=(1, 2)),
+
+            nn.Conv2d(128, 256, kernel_size=(1, 3), padding=(0, 1)),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.01),
+            nn.Dropout(0.25),  # Final dropout before reducing to the fully connected layer
+            nn.MaxPool2d(kernel_size=(1, 2), stride=(1, 2))
+        )
+
+        # Adjust the final dimensions based on the number of max-pooling layers
+        final_width = input_width // (2 ** 5)  # 5 times pooling with stride 2
+        output_size = 256 * input_height * final_width
+        output_size = 204800
+        # Fully connected layers
+        self.fc_layers = nn.Sequential(
+            nn.Linear(output_size, 128),
+            nn.LeakyReLU(0.01),
+            nn.Dropout(0.5),  # Higher dropout before the final output layer
+            nn.Linear(128, 10)  # Output layer with 10 units
+        )
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='leaky_relu')
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, 0, 0.01)
+
+    def forward(self, x):
+        x = self.conv_layers(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc_layers(x)
+        return x
+
 
 class AudioFeatureNet2D(nn.Module):
     def __init__(self, feature_type):
@@ -220,80 +231,59 @@ class AudioFeatureNet2D(nn.Module):
         if feature_type == 'Mel':
             input_channels = 1
             input_height, input_width = 20, 321
-            pool_height, pool_width = 2, 2
+            kernel_size = (5, 5)
         elif feature_type == 'Phase':
             input_channels = 1
             input_height, input_width = 9, 321
-            #pool_height, pool_width = 2, 2
+            kernel_size = (3, 3)
         elif feature_type in ['MFCC', 'DeltaDeltaMFCC']:
             input_channels = 1
             input_height, input_width = 4, 161
-            #pool_height, pool_width = 2, 1
+            kernel_size = (3, 3)
         elif feature_type == 'Envelope':
             input_channels = 1
             input_height, input_width = 1, 3
+            kernel_size = (1, 3)
         elif feature_type == 'PhaseOfEnvelope':
             input_channels = 1
             input_height, input_width = 1, 1280
+            kernel_size = (1, 3)
         else:
             raise ValueError(f"Unsupported feature type: {feature_type}")
 
-        # Separate handling for the Envelope feature type
-        if feature_type == 'Envelope' or feature_type == 'PhaseOfEnvelope':
-            self.conv_layers = nn.Sequential(
-                nn.Conv2d(input_channels, 32, kernel_size=(1, 1)),  # Use kernel size (1, 1) to avoid dimension issues
-                nn.BatchNorm2d(32),
-                nn.ReLU(),
-                nn.Conv2d(32, 64, kernel_size=(1, 1)),  # Use kernel size (1, 1)
-                nn.BatchNorm2d(64),
-                nn.ReLU(),
-                nn.Conv2d(64, 128, kernel_size=(1, 1)),  # Use kernel size (1, 1)
-                nn.BatchNorm2d(128),
-                nn.ReLU()
-            )
-            height = input_height  # No change in height dimension for kernel_size=(1, 1)
-            width = input_width
-        else:
-            self.conv_layers = nn.Sequential(
-                nn.Conv2d(input_channels, 32, kernel_size=(3, 3), padding=1),
-                nn.BatchNorm2d(32),
-                nn.ReLU(),
-                nn.Conv2d(32, 64, kernel_size=(3, 3), padding=1),
-                nn.BatchNorm2d(64),
-                nn.ReLU(),
-                nn.Conv2d(64, 128, kernel_size=(3, 3), padding=1),
-                nn.BatchNorm2d(128),
-                nn.ReLU(),
-            )
-            # Calculate the size after convolutions and pooling
-            height = input_height
-            width = input_width
+        # Initialize the convolutional layer
+        self.conv_layer = nn.Sequential(
+            nn.Conv2d(input_channels, 64, kernel_size=kernel_size, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=(2, 2), stride=(2, 2)),
+            nn.Dropout(0.25)
+        )
 
-        output_size = 128 * height * width
+        # Calculate the size after convolution and pooling
+        height = (input_height + 2 - kernel_size[0] + 1) // 2
+        width = (input_width + 2 - kernel_size[1] + 1) // 2
 
+        output_size = 64 * height * width
+
+        # Initialize the fully connected layer
         self.fc_layers = nn.Sequential(
             nn.Linear(output_size, 128),
             nn.ReLU(),
-            nn.Linear(128, 32)
+            nn.Dropout(0.5),
+            nn.Linear(128, 10)
         )
-
-    def _initialize_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='sigmoid')
-            elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, 0, 0.01)
 
     def forward(self, x):
         if torch.isnan(x).any():
             raise ValueError("Input to AudioFeatureNet2D contains NaN values")
 
-        x = self.conv_layers(x)
+        x = self.conv_layer(x)
 
         if torch.isnan(x).any():
             raise ValueError("NaN values found after conv_layers in AudioFeatureNet2D")
 
-        x = x.view(x.size(0), -1)
+        x = x.view(x.size(0), -1)  # Flatten the output for the FC layers
         x = self.fc_layers(x)
 
         if torch.isnan(x).any():
@@ -332,8 +322,6 @@ def segment_and_extract_features(audio_path, segment_length_sec, feature_extract
                         range((len(features_tensor) + batch_size - 1) // batch_size)]
 
     return batched_features
-
-
 
 
 class DistanceCorrelation(nn.Module):
