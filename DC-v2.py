@@ -31,14 +31,14 @@ configurations = {
 
     },
     'output_paths': {
-        'model': '/home/oztufan/resultsDC2/models/',
-        'training': '/home/oztufan/resultsDC2/trainresults/',
-        'evaluation': '/home/oztufan/resultsDC2/evalresults/',
-        'eeg': '/home/oztufan/resultsDC2/eeg/',
-        'audio': '/home/oztufan/resultsDC2/audio/'
+        'model': '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDC/models/',
+        'training': '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDC/trainresults/',
+        'evaluation': '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDC/evalresults/',
+        'eeg': '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDC/eeg/',
+        'audio': '/Users/efeoztufan/Desktop/A-Thesis/Codes/resultsDC/audio/'
     },
-    'audio_path': '/home/oztufan/D3/AllStories-250Hz.wav',
-    'eeg_path': '/home/oztufan/D3/EEG'
+    'audio_path': '/Users/efeoztufan/Desktop/A-Thesis/Datasets/Ali/AllStories-250Hz.wav',
+    'eeg_path': '/Users/efeoztufan/Desktop/A-Thesis/Datasets/Ali/EEG'
 }
 
 # Define constants and parameters
@@ -121,13 +121,28 @@ def load_and_segment_eeg(subject_id, segment_length_sec, sample_rate_eeg, batch_
     # Extract phase if requested
     if transform_type == 'phase':
         eeg_data = extract_phase(eeg_data)
-        # Check for NaN and infinite values after extracting phase
-    check_for_nan_inf(eeg_data, "Phase Extracted EEG Data")
-    print(
-        f"Phase Extracted EEG data: mean={np.mean(eeg_data)}, std={np.std(eeg_data)}, min={np.min(eeg_data)}, max={np.max(eeg_data)}")
 
+        print(
+            f"Phase Extracted EEG data: mean={np.mean(eeg_data)}, std={np.std(eeg_data)}, min={np.min(eeg_data)}, max={np.max(eeg_data)}")
+    else:
+        # Assuming eeg_data is already loaded and possibly filtered
+        analytic_signal = hilbert(eeg_data, axis=1)
+        amplitude_envelope = np.abs(analytic_signal)
+        eeg_data = amplitude_envelope
+        # Optionally print or check the statistics of the amplitude
+        print(
+            f"Amplitude EEG data: mean={np.mean(amplitude_envelope)}, std={np.std(amplitude_envelope)}, min={np.min(amplitude_envelope)}, max={np.max(amplitude_envelope)}")
+    # Check for NaN and infinite values after extracting phase
+    check_for_nan_inf(eeg_data, "Extracted EEG Data")
+
+
+    # Use only best channels only for Ali's Dataset
+    best_channels = [23 , 53, 34, 55, 7, 54, 24, 5, 6, 51]
+    eeg_data = eeg_data[best_channels, :]
     # Apply PCA
-    eeg_data = apply_pca_to_eeg_data(eeg_data)
+    #eeg_data = apply_pca_to_eeg_data(eeg_data)
+
+
 
     # eeg_data = clamp_data(torch.tensor(eeg_data), name="EEG Data Last")
 
